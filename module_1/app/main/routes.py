@@ -5,4 +5,14 @@ main_bp = Blueprint("main", __name__)
 
 @main_bp.route("/")
 def index():
-    return render_template("base.html")
+    return render_template("index.html")
+
+
+@main_bp.route("/contact")
+def contact():
+    return render_template("contact.html")
+
+
+@main_bp.route("/projects")
+def projects():
+    return render_template("projects.html")

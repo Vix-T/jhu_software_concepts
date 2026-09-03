@@ -3,8 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <title>App</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/nav.css') }}">
 </head>
 <body>
-    Hello
+    <nav class="navbar">
+        <a class="nav-link {% if request.endpoint == 'main.index' %}active{% endif %}"
+           href="{{ url_for('main.index') }}">Home</a>
+        <a class="nav-link {% if request.endpoint == 'main.contact' %}active{% endif %}"
+           href="{{ url_for('main.contact') }}">Contact</a>
+        <a class="nav-link {% if request.endpoint == 'main.projects' %}active{% endif %}"
+           href="{{ url_for('main.projects') }}">Projects</a>
+    </nav>
+
+    <main>
+        {% block content %}
+        Hello
+        {% endblock %}
+    </main>
 </body>
 </html>
