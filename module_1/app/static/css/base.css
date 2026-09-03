@@ -1,0 +1,52 @@
+:root {
+    --color-bg: #16181d;
+    --color-nav: #1f2937;
+    --color-nav-hover: #2c3a4a;
+    --color-accent: #5eb8a8;
+    --color-accent-muted: #3f6f68;
+    --color-text: #e5e7eb;
+    --color-text-muted: #9aa1ac;
+    --color-border: #2c3037;
+    --color-card-bg: #1c1f26;
+    --color-card-bg-secondary: #1a1d23;
+
+    --font-heading: "Fraunces", serif;
+    --font-body: "Inter", sans-serif;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-body);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+a {
+    color: var(--color-accent);
+}
+
+main {
+    padding: 5.5rem 1.5rem 3rem;
+    max-width: 960px;
+    margin: 0 auto;
+}

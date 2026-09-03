@@ -18,7 +18,8 @@
     margin-top: 0;
     font-size: 1.1rem;
     font-weight: 500;
-    color: #555555;
+    font-family: var(--font-body);
+    color: var(--color-text-muted);
 }
 
 .home-text p {
@@ -36,6 +37,7 @@
     max-width: 220px;
     border-radius: 8px;
     object-fit: cover;
+    border: 1px solid var(--color-border);
 }
 
 /* Contact page */
@@ -49,13 +51,15 @@
     display: inline-block;
     width: 6rem;
     font-weight: 600;
+    color: var(--color-text-muted);
 }
 
 /* Projects page */
 .project-card {
     max-width: 700px;
     padding: 1.25rem 1.5rem;
-    border: 1px solid #dddddd;
+    background-color: var(--color-card-bg);
+    border: 1px solid var(--color-border);
     border-radius: 8px;
 }
 
@@ -70,7 +74,7 @@
 .project-link {
     display: inline-block;
     margin-top: 0.5rem;
-    color: #3498db;
+    color: var(--color-accent);
     font-weight: 600;
     text-decoration: none;
 }
@@ -89,16 +93,18 @@
     font-size: 1rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #888888;
-    border-bottom: 1px solid #dddddd;
+    font-family: var(--font-body);
+    font-weight: 600;
+    color: var(--color-text-muted);
+    border-bottom: 1px solid var(--color-border);
     padding-bottom: 0.5rem;
     margin-bottom: 1rem;
 }
 
 .project-card-secondary {
     padding: 1rem 1.25rem;
-    border: 1px solid #eeeeee;
-    background-color: #fafafa;
+    border: 1px solid var(--color-border);
+    background-color: var(--color-card-bg-secondary);
     border-radius: 6px;
     margin-bottom: 1rem;
 }
@@ -111,14 +117,15 @@
 .project-card-secondary p {
     line-height: 1.6;
     font-size: 0.9rem;
-    color: #444444;
+    color: var(--color-text-muted);
 }
 
 /* Publications page */
 .publication-card {
     max-width: 700px;
     padding: 1.25rem 1.5rem;
-    border: 1px solid #dddddd;
+    background-color: var(--color-card-bg);
+    border: 1px solid var(--color-border);
     border-radius: 8px;
 }
 
