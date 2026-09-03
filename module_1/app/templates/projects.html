@@ -1,5 +1,24 @@
 {% extends "base.html" %}
 
 {% block content %}
-Projects page coming soon.
+<section class="projects">
+    <h1>Projects</h1>
+    <article class="project-card">
+        <h2>Personal Website (Module 1 - Flask and Blueprints)</h2>
+        <p>
+            This site is a three-page personal portfolio built with Flask,
+            structured around the application factory pattern with
+            Blueprints to keep route logic modular and organized. It
+            features a persistent, top-right navigation bar with
+            active-page highlighting driven by Flask's request object,
+            externally managed CSS for clean separation of structure and
+            style, and a fully reproducible environment captured in
+            requirements.txt.
+        </p>
+        <a class="project-link" href="https://github.com/Vix-T/jhu_software_concepts/tree/main/module_1"
+           target="_blank" rel="noopener noreferrer">
+            View on GitHub
+        </a>
+    </article>
+</section>
 {% endblock %}

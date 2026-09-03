@@ -1,5 +1,32 @@
 {% extends "base.html" %}
 
 {% block content %}
-Hello
+<section class="home">
+    <div class="home-text">
+        <h1>Vix Talbot</h1>
+        <h2>Data Scientist &amp; MSAI Candidate, Johns Hopkins University</h2>
+        <p>
+            I'm a data scientist with a background in consulting, now pursuing
+            my Master's in Artificial Intelligence at Johns Hopkins as I
+            transition toward machine learning engineering. My work spans
+            computational stylometry, healthcare research, and NLP.
+        </p>
+        <p>
+            Integrity and rigor guide how I work. During a neuroscience
+            internship, my final presentation included data I'd carefully
+            processed; a senior researcher in attendance recognized an
+            inconsistency it revealed, which traced back to a flaw in the
+            study's underlying protocol. Watching that come to light shaped
+            how I think about transparency and reproducibility, and led me
+            to interrogate a race as a proxy variable that surfaced later in
+            my own thesis rather than let it stand unexamined. I care as
+            much about how a model is built as what it predicts, and about
+            bringing the people I collaborate with along with genuine care,
+            not just technical competence.
+        </p>
+    </div>
+    <div class="home-photo">
+        <img src="{{ url_for('static', filename='images/headshot.jpg') }}" alt="Photo of Vix Talbot">
+    </div>
+</section>
 {% endblock %}

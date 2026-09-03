@@ -1,0 +1,91 @@
+/* Home page */
+.home {
+    display: flex;
+    align-items: flex-start;
+    gap: 2.5rem;
+    max-width: 900px;
+}
+
+.home-text {
+    flex: 2;
+}
+
+.home-text h1 {
+    margin-bottom: 0.25rem;
+}
+
+.home-text h2 {
+    margin-top: 0;
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: #555555;
+}
+
+.home-text p {
+    line-height: 1.6;
+}
+
+.home-photo {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+}
+
+.home-photo img {
+    width: 100%;
+    max-width: 220px;
+    border-radius: 8px;
+    object-fit: cover;
+}
+
+/* Contact page */
+.contact-list {
+    list-style: none;
+    padding: 0;
+    line-height: 2;
+}
+
+.contact-label {
+    display: inline-block;
+    width: 6rem;
+    font-weight: 600;
+}
+
+/* Projects page */
+.project-card {
+    max-width: 700px;
+    padding: 1.25rem 1.5rem;
+    border: 1px solid #dddddd;
+    border-radius: 8px;
+}
+
+.project-card h2 {
+    margin-top: 0;
+}
+
+.project-card p {
+    line-height: 1.6;
+}
+
+.project-link {
+    display: inline-block;
+    margin-top: 0.5rem;
+    color: #3498db;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.project-link:hover {
+    text-decoration: underline;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+    .home {
+        flex-direction: column;
+    }
+
+    .home-photo {
+        justify-content: flex-start;
+    }
+}
