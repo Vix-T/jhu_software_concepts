@@ -20,5 +20,72 @@
             View on GitHub
         </a>
     </article>
+
+    <div class="related-work">
+        <h2 class="related-work-heading">Related Work</h2>
+
+        <article class="project-card project-card-secondary">
+            <h3>Complex Network Analysis of Russian Translations</h3>
+            <p>
+                To address the challenge in translated literature research,
+                where a translator's individual style is obscured by the
+                original author's semantic content, this project applies
+                complex network analysis alongside classical stylometry to
+                help define the subtle styles of five Russian translations
+                of Mark Twain's The Adventures of Huckleberry Finn
+                (1911-1960). The computational analysis revealed
+                statistically significant divergences in both lexical and
+                topological profiles, confirming that translators retain
+                distinct signatures despite sharing a source text. Classical
+                metrics indicate a reduction in lexical diversity over time,
+                identifying the 1911 Engel'gardt translation as an outlier
+                with the highest vocabulary richness compared to the
+                statistically repetitive profiles of the 1949 Braude and
+                1960 Daruzes texts. Structural analysis discovered
+                topological anomalies: the 1960 Daruzes translation
+                uniquely inverts the standard grammatical hierarchy by
+                prioritizing verbs over nouns. Finally,
+                betweenness centrality analysis found a wide range of data
+                when ranking the most connective nodes across the corpus,
+                suggesting that different translators had quite different
+                preferences for which stop words they relied upon.
+            </p>
+            <a class="project-link" href="https://github.com/Vix-T/nlp-descriptive-russian-translations"
+               target="_blank" rel="noopener noreferrer">
+                View on GitHub
+            </a>
+        </article>
+
+        <article class="project-card project-card-secondary">
+            <h3>Stylometric Analysis of Mark Twain's The Adventures of Huckleberry Finn in Russian Translation</h3>
+            <p>
+                Dr. Cassio de Oliveira, a professor of Russian literature at
+                Portland State University, was writing a book on Mark
+                Twain's reception in the Soviet Union and needed
+                quantitative support for his qualitative analysis of five
+                Russian translations spanning 1911-1960. As lead of a
+                five-person consulting team through PSU's Computation and Data-Enabled Science NSF Research
+                Training Group, I directed the technical execution of a
+                stylometric analysis using Burrows' Delta method, building
+                an R-based NLP pipeline (udpipe, tm, proxy, factoextra) to
+                lemmatize, vectorize, and compare the five translations by
+                word frequency, part-of-speech patterns, and lexical
+                diversity. The pipeline used PCA for dimensionality
+                reduction and cosine similarity to quantify stylistic
+                distance between every pair of translations, producing
+                similarity matrices and cluster visualizations Dr. de
+                Oliveira could cite directly in his book. Beyond the
+                technical build, I led team workflow: since our program
+                hadn't covered version control, I brought in an outside Git
+                consultant to train the team on collaborative coding
+                practices, and ensured each member understood the analysis
+                deeply enough to present it confidently to the client.
+            </p>
+            <a class="project-link" href="https://github.com/Vix-T/nlp-quantitative-analysis-twain-russian-R"
+               target="_blank" rel="noopener noreferrer">
+                View on GitHub
+            </a>
+        </article>
+    </div>
 </section>
 {% endblock %}

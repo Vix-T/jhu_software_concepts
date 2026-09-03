@@ -79,6 +79,58 @@
     text-decoration: underline;
 }
 
+/* Related work (secondary, supplementary projects) */
+.related-work {
+    max-width: 700px;
+    margin-top: 2.5rem;
+}
+
+.related-work-heading {
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #888888;
+    border-bottom: 1px solid #dddddd;
+    padding-bottom: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.project-card-secondary {
+    padding: 1rem 1.25rem;
+    border: 1px solid #eeeeee;
+    background-color: #fafafa;
+    border-radius: 6px;
+    margin-bottom: 1rem;
+}
+
+.project-card-secondary h3 {
+    margin-top: 0;
+    font-size: 1rem;
+}
+
+.project-card-secondary p {
+    line-height: 1.6;
+    font-size: 0.9rem;
+    color: #444444;
+}
+
+/* Publications page */
+.publication-card {
+    max-width: 700px;
+    padding: 1.25rem 1.5rem;
+    border: 1px solid #dddddd;
+    border-radius: 8px;
+}
+
+.publication-card h2 {
+    margin-top: 0;
+    font-size: 1.2rem;
+}
+
+.publication-card p {
+    line-height: 1.6;
+}
+
 /* Responsive */
 @media (max-width: 600px) {
     .home {

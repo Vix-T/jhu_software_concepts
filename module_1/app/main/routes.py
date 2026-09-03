@@ -16,3 +16,8 @@ def contact():
 @main_bp.route("/projects")
 def projects():
     return render_template("projects.html")
+
+
+@main_bp.route("/publications")
+def publications():
+    return render_template("publications.html")
