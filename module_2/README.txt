@@ -14,7 +14,7 @@ Robots.txt Compliance
 ========
 
 Before scraping, the Grad Cafe robots.txt (https://www.thegradcafe.com/robots.txt)
-was reviewed and a screenshot saved as screenshot.jpg in this folder.
+was reviewed and a screenshot saved as robotscreenshot.pdf in this folder.
 
 The generic User-agent: * rule specifies "Allow: /" with the following exception
 paths disallowed: /signin, /register, /forgot-password, /reset-password,
