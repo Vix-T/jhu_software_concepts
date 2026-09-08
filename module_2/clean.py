@@ -3,6 +3,8 @@ Cleans, normalizes, and persists Grad Cafe applicant data collected by
 scrape.py.
 """
 
+import json
+
 
 def clean_data(raw_data):
     """
@@ -18,15 +20,47 @@ def clean_data(raw_data):
     pass
 
 
-def save_data(data, path):
+def _normalize_missing_keys(records):
     """
-    Save cleaned applicant data to disk.
+    Ensure every record in a list of dictionaries has the same set of
+    keys, filling in any keys missing from a given record with None.
 
     Args:
-        data: The cleaned data to persist.
+        records: A list of dictionaries that may have inconsistent keys
+            across entries.
+
+    Returns:
+        list: A new list of dictionaries, each containing the full set
+            of keys observed across all records, with None used as the
+            value for any key a given record was missing.
+    """
+    all_keys = {}
+    for record in records:
+        all_keys.update(dict.fromkeys(record.keys()))
+
+    normalized = []
+    for record in records:
+        normalized_record = {key: record.get(key, None) for key in all_keys}
+        normalized.append(normalized_record)
+    return normalized
+
+
+def save_data(data, path):
+    """
+    Save cleaned applicant data to disk as a JSON array.
+
+    Scans all records to collect the full set of keys present anywhere
+    in the dataset, fills any record missing a given key with None so
+    every object in the output has identical keys, then writes the
+    result to path as a single formatted JSON array (not JSON Lines).
+
+    Args:
+        data: The cleaned data to persist, as a list of dictionaries.
         path: The destination file path.
     """
-    pass
+    normalized_data = _normalize_missing_keys(data)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(normalized_data, f, indent=2)
 
 
 def load_data(path):
