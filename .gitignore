@@ -10,3 +10,5 @@ module_2/llm_hosting/models/
 module_2/llm_hosting/out.json
 module_2/_test_save_data_output.json
 module_2/_captured_survey_page.html
+module_2/_captured_pages/
+module_2/_scrape_state.json
