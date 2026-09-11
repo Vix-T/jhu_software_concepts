@@ -12,3 +12,12 @@ module_2/_test_save_data_output.json
 module_2/_captured_survey_page.html
 module_2/_captured_pages/
 module_2/_scrape_state.json
+module_2/_test_date_filter2_pages/
+module_2/_test_date_filter2_state.json
+module_2/_test_date_filter3_pages/
+module_2/_test_date_filter3_state.json
+module_2/_test_date_filter3b_pages/
+module_2/_test_date_filter3b_state.json
+module_2/_test_parallel_clean_output.json
+module_2/_test_small_batch.json
+module_2/applicant_data.json

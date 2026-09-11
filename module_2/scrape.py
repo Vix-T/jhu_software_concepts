@@ -15,6 +15,7 @@ import time
 
 from bs4 import BeautifulSoup
 from selenium import webdriver
+from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.chrome.options import Options
 
 
@@ -174,18 +175,31 @@ def scrape_data(
     delay_seconds=2.5,
     state_file="_scrape_state.json",
     captured_dir="_captured_pages",
+    batch_size=150,
+    crash_retry_wait=5,
 ):
     """
     Scrape Grad Cafe survey results end-to-end, until target_count entries
     have been collected.
 
-    This is a thin convenience wrapper around capture_pages() and
-    parse_captured_pages() — it repeatedly captures a small batch of pages
-    (raw HTML, via a live attached browser) and then re-parses everything
-    captured so far to check the running entry total, stopping once
-    target_count is reached or a capture batch makes no forward progress
-    (0 new pages captured, meaning capture_pages() hit a stopping
-    condition such as reaching the last page).
+    This is a convenience wrapper around capture_pages() and
+    parse_captured_pages(), built with crash resilience in mind: real
+    overnight runs showed that a single long, uncapped capture_pages()
+    call is fragile against the attached Chrome/Selenium session
+    crashing partway through (observed as InvalidSessionIdException and
+    WebDriverException after a few hundred to a couple thousand pages).
+    Rather than one uncapped run, pages are captured in batches of
+    batch_size at a time. Between batches this function re-reads
+    state_file and re-parses everything captured so far, so a crash in
+    one batch can never lose more than that batch's progress — and
+    typically loses none, since capture_pages() itself persists
+    next_url/pages_captured to state_file after every single page, not
+    just at the end of a batch. If a batch call raises a session/driver
+    crash, it's caught here, a short wait is taken, and the loop simply
+    tries again: the next capture_pages() call re-attaches to Chrome
+    (via its own debuggerAddress attach logic) and resumes from
+    state_file's last saved position. This makes multi-hour scrapes safe
+    to kick off and leave unattended.
 
     capture_pages() and parse_captured_pages() are also fully usable on
     their own: e.g. parse_captured_pages() can be re-run by itself,
@@ -202,12 +216,14 @@ def scrape_data(
         state_file: Path to the JSON file used to persist capture
             resumability state.
         captured_dir: Directory holding captured page_*.html files.
+        batch_size: Number of new pages to request per capture_pages()
+            call.
+        crash_retry_wait: Seconds to wait before retrying after a
+            capture_pages() call crashes mid-batch.
 
     Returns:
         list: The full flat list of parsed applicant entry records.
     """
-    batch_size = 20
-
     while True:
         if os.path.exists(state_file):
             with open(state_file, "r", encoding="utf-8") as f:
@@ -215,17 +231,43 @@ def scrape_data(
         else:
             current_pages_captured = 0
 
-        new_pages = capture_pages(
-            start_url=start_url,
-            target_pages=current_pages_captured + batch_size,
-            delay_seconds=delay_seconds,
-            state_file=state_file,
-            captured_dir=captured_dir,
-        )
+        try:
+            capture_pages(
+                start_url=start_url,
+                target_pages=current_pages_captured + batch_size,
+                delay_seconds=delay_seconds,
+                state_file=state_file,
+                captured_dir=captured_dir,
+            )
+        except WebDriverException as exc:
+            print(
+                f"Browser session crashed during batch starting at page "
+                f"{current_pages_captured + 1} (target "
+                f"{current_pages_captured + batch_size}): {exc}"
+            )
+            print(
+                "State was preserved up to the last successfully captured "
+                "page; retrying with a fresh browser attach."
+            )
+            time.sleep(crash_retry_wait)
+            continue
 
         entries = parse_captured_pages(captured_dir=captured_dir)
 
-        if len(entries) >= target_count or new_pages == 0:
+        with open(state_file, "r", encoding="utf-8") as f:
+            state = json.load(f)
+
+        print(
+            f"Progress: {state['pages_captured']} pages captured, "
+            f"{len(entries)} entries parsed so far."
+        )
+
+        if state["next_url"] is None:
+            print("Reached natural end of available pages.")
+            break
+
+        if len(entries) >= target_count:
+            print(f"Target of {target_count} entries reached.")
             break
 
     return parse_captured_pages(captured_dir=captured_dir)

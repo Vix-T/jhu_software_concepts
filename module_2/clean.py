@@ -163,7 +163,17 @@ def clean_with_llm_parallel(input_path, output_path, llm_script_path="llm_hostin
         input_temp = tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", delete=False, encoding="utf-8"
         )
-        json.dump(chunk, input_temp)
+        chunk_with_program = [
+            {
+                **record,
+                "program": (
+                    f"{record.get('Program Name') or ''}, "
+                    f"{record.get('University') or ''}"
+                ).strip(", "),
+            }
+            for record in chunk
+        ]
+        json.dump(chunk_with_program, input_temp)
         input_temp.close()
 
         output_temp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
@@ -179,6 +189,18 @@ def clean_with_llm_parallel(input_path, output_path, llm_script_path="llm_hostin
 
     for process, _, _ in processes:
         process.wait()
+
+    failures = [
+        (i, process.returncode)
+        for i, (process, _, _) in enumerate(processes)
+        if process.returncode != 0
+    ]
+    if failures:
+        failure_details = ", ".join(
+            f"chunk {i + 1} of {len(processes)} (exit code {returncode})"
+            for i, returncode in failures
+        )
+        raise RuntimeError(f"LLM worker(s) failed: {failure_details}")
 
     merged_results = []
     for _, input_path_temp, output_path_temp in processes:
