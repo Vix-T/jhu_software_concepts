@@ -219,3 +219,79 @@ def clean_with_llm_parallel(input_path, output_path, llm_script_path="llm_hostin
     print(f"Workers used: {worker_count}")
     print(f"Records processed: {len(merged_results)}")
     print(f"Output written to: {output_path}")
+
+
+def clean_with_llm_parallel_deduped(input_path, output_path, llm_script_path="llm_hosting/app.py"):
+    """
+    Clean applicant data by sending only the unique (Program Name,
+    University) combinations through the LLM, then broadcasting each
+    result back out to every record that shares that combination.
+
+    Real-world Grad Cafe data contains many entries with the exact same
+    (Program Name, University) pair, so calling the LLM once per record
+    wastes most of its work re-cleaning strings it has already cleaned.
+    This function deduplicates down to the unique pairs, reuses
+    clean_with_llm_parallel() to clean just that small set, then maps
+    each unique pair's LLM output back onto every matching record in the
+    full original dataset. This avoids redundant LLM calls while still
+    producing a fully annotated output the same size as the input.
+
+    Args:
+        input_path: Path to a JSON file containing a single JSON array
+            of records (as written by save_data()).
+        output_path: Path to write the cleaned, fully-annotated JSON
+            array to.
+        llm_script_path: Path to the LLM-hosting script to invoke,
+            forwarded to clean_with_llm_parallel().
+    """
+    with open(input_path, "r", encoding="utf-8") as f:
+        records = json.load(f)
+
+    unique_combos = dict.fromkeys(
+        (record.get("Program Name") or "", record.get("University") or "")
+        for record in records
+    )
+
+    unique_placeholders = [
+        {"Program Name": program_name, "University": university}
+        for program_name, university in unique_combos
+    ]
+
+    dedup_input = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, encoding="utf-8"
+    )
+    json.dump(unique_placeholders, dedup_input)
+    dedup_input.close()
+
+    dedup_output = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+    dedup_output.close()
+
+    clean_with_llm_parallel(dedup_input.name, dedup_output.name, llm_script_path)
+
+    with open(dedup_output.name, "r", encoding="utf-8") as f:
+        cleaned_unique = json.load(f)
+
+    lookup = {
+        (record.get("Program Name") or "", record.get("University") or ""): {
+            "llm-generated-program": record.get("llm-generated-program"),
+            "llm-generated-university": record.get("llm-generated-university"),
+        }
+        for record in cleaned_unique
+    }
+
+    annotated_records = []
+    for record in records:
+        combo = (record.get("Program Name") or "", record.get("University") or "")
+        annotated_records.append({**record, **lookup[combo]})
+
+    save_data(annotated_records, output_path)
+
+    os.remove(dedup_input.name)
+    os.remove(dedup_output.name)
+
+    total_records = len(records)
+    unique_count = len(unique_placeholders)
+    reduction_factor = total_records / unique_count if unique_count else 0.0
+    print(f"Total records: {total_records}")
+    print(f"Unique records sent to LLM: {unique_count}")
+    print(f"Reduction factor: {reduction_factor:.1f}x")
