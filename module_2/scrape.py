@@ -15,8 +15,11 @@ import time
 
 from bs4 import BeautifulSoup
 from selenium import webdriver
-from selenium.common.exceptions import WebDriverException
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 
 def capture_pages(
@@ -86,8 +89,25 @@ def capture_pages(
         options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
         driver = webdriver.Chrome(options=options)
 
+        def _wait_for_results_table(url):
+            try:
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located(
+                        (
+                            By.CSS_SELECTOR,
+                            "tbody.tw-divide-y.tw-divide-gray-200.tw-bg-white",
+                        )
+                    )
+                )
+            except TimeoutException:
+                print(
+                    f"Results table never appeared for {url} "
+                    "(page may be blank/failed) — continuing anyway"
+                )
+
         current_url = next_url
         driver.get(current_url)
+        _wait_for_results_table(current_url)
 
         while True:
             page_source = driver.page_source
@@ -121,6 +141,7 @@ def capture_pages(
             time.sleep(delay_seconds)
             current_url = next_url
             driver.get(current_url)
+            _wait_for_results_table(current_url)
 
     print(f"Pages captured this run: {pages_captured_this_run}")
     print(f"Stopped because: {stop_reason}")

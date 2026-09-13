@@ -13,14 +13,18 @@ def clean_data(raw_data):
     """
     Clean and normalize a list of raw applicant entry records.
 
+    Ensures every record has the same set of keys (via
+    _normalize_missing_keys()), independent of and prior to save_data().
+
     Args:
         raw_data: A list of raw applicant entry records as produced by
             scrape.scrape_data().
 
     Returns:
-        list: A list of cleaned applicant entry records.
+        list: A new list of applicant entry records, each containing
+            the full set of keys observed across all records.
     """
-    pass
+    return _normalize_missing_keys(raw_data)
 
 
 def _normalize_missing_keys(records):
@@ -62,6 +66,8 @@ def save_data(data, path):
         path: The destination file path.
     """
     normalized_data = _normalize_missing_keys(data)
+    for record in normalized_data:
+        record["Applicant Status"] = _normalize_status(record.get("Applicant Status"))
     with open(path, "w", encoding="utf-8") as f:
         json.dump(normalized_data, f, indent=2)
 
@@ -71,12 +77,19 @@ def load_data(path):
     Load previously saved applicant data from disk.
 
     Args:
-        path: The file path to load data from.
+        path: The file path to load data from, as a single JSON array
+            (as produced by save_data()).
 
     Returns:
-        list: The loaded applicant entry records.
+        list: The loaded applicant entry records, as a list of dicts.
+
+    Raises:
+        FileNotFoundError: If no file exists at path.
     """
-    pass
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"No data file found at {path!r}")
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def _normalize_status(status):
@@ -90,7 +103,9 @@ def _normalize_status(status):
     Returns:
         str: The normalized status string.
     """
-    pass
+    if status is None:
+        return None
+    return status.strip().title()
 
 
 def _get_worker_count():

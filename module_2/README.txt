@@ -67,7 +67,7 @@ Robots.txt Compliance
 ========
 
 Before scraping, the Grad Cafe robots.txt (https://www.thegradcafe.com/robots.txt)
-was reviewed and a screenshot saved as robotscreenshot.pdf in this folder.
+was reviewed and a screenshot saved as screenshot.jpg in this folder.
 
 The generic User-agent: * rule specifies "Allow: /" with the following exception
 paths disallowed: /signin, /register, /forgot-password, /reset-password,
@@ -92,6 +92,15 @@ Known Bugs
 
 1. Two capture pages (out of 3,010) rendered blank during Chrome
    navigation and were excluded rather than reprocessed.
+
+   Update: Two pages captured blank during scraping (page_00075,
+   page_00123, now in the archived data) likely stemmed from grabbing
+   page_source before the results table had fully rendered.
+   capture_pages() was subsequently updated to add an explicit
+   WebDriverWait for the results table's presence after each page
+   load, with a timeout that logs and continues rather than crashing
+   — this may prevent a recurrence, though the original two instances
+   were not re-captured.
 
 2. A ~100-result-ID gap exists at the seam between two
    date-filtered capture chunks (same calendar date, different
