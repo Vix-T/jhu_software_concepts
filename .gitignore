@@ -21,6 +21,7 @@ module_2/_test_date_filter3b_state.json
 module_2/_test_parallel_clean_output.json
 module_2/_test_small_batch.json
 module_2/applicant_data.json
+module_2/llm_extend_applicant_data.json
 module_2/_mac_chunk.json
 module_2/_pc_chunk.json
 module_2/_pc_chunk.zip
