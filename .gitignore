@@ -26,3 +26,11 @@ module_2/_mac_chunk.json
 module_2/_pc_chunk.json
 module_2/_pc_chunk.zip
 module_2/_test_*.json
+
+# Module-agnostic ignore rules (added for module_3+)
+*/llm_hosting/models/
+*/llm_hosting/out.json
+*/_test_save_data_output.json
+*/_captured_pages/
+*/_scrape_state.json
+*/_captured_survey_page.html
