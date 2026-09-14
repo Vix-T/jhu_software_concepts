@@ -34,3 +34,4 @@ module_2/_test_*.json
 */_captured_pages/
 */_scrape_state.json
 */_captured_survey_page.html
+.env
