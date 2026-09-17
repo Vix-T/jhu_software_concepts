@@ -199,6 +199,43 @@ def q8_q9_university_breakdown(cur):
     return rows
 
 
+def custom1(cur):
+    """Percent of non-null GRE Quant entries outside the plausible [130,170] range.
+
+    Mirrors the BETWEEN 130 AND 170 filter already applied in Q3, but reports
+    the contamination rate itself rather than filtering it out.
+    """
+    cur.execute(
+        """
+        SELECT
+            SUM(CASE WHEN gre NOT BETWEEN 130 AND 170 THEN 1 ELSE 0 END),
+            COUNT(*)
+        FROM applicants
+        WHERE gre IS NOT NULL
+        """
+    )
+    contaminated, total = cur.fetchone()
+    percent = 100.0 * contaminated / total
+    return contaminated, total, percent
+
+
+def custom2(cur):
+    """Acceptance rate by degree type (PhD vs. Masters, plus all other degree values)."""
+    cur.execute(
+        """
+        SELECT
+            degree,
+            SUM(CASE WHEN status ILIKE 'Accepted' THEN 1 ELSE 0 END) AS accepted,
+            COUNT(*) AS total
+        FROM applicants
+        WHERE degree IS NOT NULL
+        GROUP BY degree
+        ORDER BY total DESC
+        """
+    )
+    return [(degree, accepted, total, 100.0 * accepted / total) for degree, accepted, total in cur.fetchall()]
+
+
 def main():
     load_dotenv()
 
@@ -222,6 +259,8 @@ def main():
             q8_count = q8(cur)
             q9_count = q9(cur)
             breakdown = q8_q9_university_breakdown(cur)
+            custom1_contaminated, custom1_total, custom1_pct = custom1(cur)
+            custom2_rows = custom2(cur)
     finally:
         conn.close()
 
@@ -248,6 +287,15 @@ def main():
     print("Per-university breakdown under Q8/Q9 filters (original vs. LLM-generated fields):")
     for name, orig_count, llm_count in breakdown:
         print(f"  {name:<16} original={orig_count:<4} llm={llm_count:<4} diff={orig_count - llm_count}")
+    print()
+    print(
+        f"Custom Q1 (GRE Quant contamination rate): {custom1_pct:.2f}% "
+        f"({custom1_contaminated}/{custom1_total} entries outside the plausible 130-170 range)"
+    )
+    print()
+    print("Custom Q2 (acceptance rate by degree type):")
+    for degree, accepted, total, pct in custom2_rows:
+        print(f"  {degree:<10} {pct:.2f}% ({accepted}/{total})")
 
 
 if __name__ == "__main__":
