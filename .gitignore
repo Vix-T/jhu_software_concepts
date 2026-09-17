@@ -35,3 +35,8 @@ module_2/_test_*.json
 */_scrape_state.json
 */_captured_survey_page.html
 .env
+
+# Draft/scratch write-up material (not final deliverables)
+module_3/draft_writeups.txt
+module_3/query_results_draft.md
+module_3/limitations_draft.md
