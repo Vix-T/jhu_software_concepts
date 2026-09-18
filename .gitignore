@@ -36,6 +36,12 @@ module_2/_test_*.json
 */_captured_survey_page.html
 .env
 
+# Pull Data (Flask "Pull Data" button) runtime state -- not source, not data to keep
+*/.scrape_lock
+*/_pull_data_state.json
+*/_pull_data_pages/
+*/_pull_data_new_entries.json
+
 # Draft/scratch write-up material (not final deliverables)
 module_3/draft_writeups.txt
 module_3/query_results_draft.md

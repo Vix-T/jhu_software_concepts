@@ -9,6 +9,32 @@
   <header>
     <h1>Grad Café Applicant Data — Analysis</h1>
     <p class="subtitle">SQL/ORM query results, computed live from the <code>applicants</code> table.</p>
+
+    <div class="actions">
+      <form method="post" action="{{ url_for('pull_data') }}">
+        <button type="submit">Pull Data</button>
+        <span class="action-note">Requires an already-verified Chrome remote-debugging session — see README.txt</span>
+      </form>
+      <form method="post" action="{{ url_for('update_analysis') }}">
+        <button type="submit">Update Analysis</button>
+      </form>
+    </div>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+      <ul class="flash-messages">
+        {% for message in messages %}
+        <li>{{ message }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    {% endwith %}
+
+    {% if pull_status.running %}
+    <div class="status-banner">
+      A data pull is currently in progress (started {{ pull_status.started_at }}) — numbers below may not include the newest data yet.
+    </div>
+    {% endif %}
   </header>
 
   <main>

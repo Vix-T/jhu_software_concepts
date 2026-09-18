@@ -24,8 +24,68 @@ header h1 {
 
 .subtitle {
   color: #55606b;
-  margin: 0;
+  margin: 0 0 16px 0;
   font-size: 0.95rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.actions form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+
+.actions button {
+  background: #1a4d8f;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 9px 16px;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.actions button:hover {
+  background: #123a6e;
+}
+
+.action-note {
+  color: #6b7885;
+  font-size: 0.8rem;
+}
+
+.flash-messages {
+  list-style: none;
+  margin: 0 0 12px 0;
+  padding: 0;
+}
+
+.flash-messages li {
+  background: #eef3f8;
+  border: 1px solid #c8d6e5;
+  color: #10243e;
+  padding: 8px 14px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 0.9rem;
+}
+
+.status-banner {
+  background: #fdf3e3;
+  border: 1px solid #e8c47c;
+  color: #6b4a00;
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
 }
 
 main {

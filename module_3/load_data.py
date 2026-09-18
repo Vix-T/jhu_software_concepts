@@ -97,7 +97,7 @@ def load_records(path):
         return json.load(f)
 
 
-def main():
+def main(data_file=DATA_FILE):
     load_dotenv()
 
     conn = psycopg2.connect(
@@ -117,7 +117,7 @@ def main():
             with conn.cursor() as cur:
                 cur.execute(CREATE_TABLE_SQL)
 
-        records = load_records(DATA_FILE)
+        records = load_records(data_file)
 
         with conn:
             with conn.cursor() as cur:
@@ -148,6 +148,8 @@ def main():
         print("  Failure details (first 10):")
         for index, reason in failed[:10]:
             print(f"    record[{index}]: {reason}")
+
+    return inserted, skipped_duplicates, failed
 
 
 if __name__ == "__main__":
