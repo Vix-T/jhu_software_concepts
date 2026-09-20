@@ -2,13 +2,25 @@
 
 Reuses the exact same word-boundary regex patterns already defined in
 query_data.py for Q8/Q9 university/program matching (imported, not
-redefined), and the same Applicant model / Session from models.py. No
-raw SQL (text()) or psycopg2 cursors are used anywhere -- everything is
-expressed with select()/where()/func/and_/or_/case().
+redefined), and the same Applicant model / Session from models.py. The
+ORM query functions themselves (orm_q1/orm_q4/orm_q5/orm_q8/orm_q9/
+orm_custom1) use no raw SQL (text()) or psycopg2 cursors anywhere --
+everything is expressed with select()/where()/func/and_/or_/case().
+
+main()'s comparison harness is the one exception: it calls
+query_data.py's own raw-SQL functions (q1/q4/q5/q8/q9/custom1) live,
+via a psycopg2 cursor, so the "raw-SQL" side of the comparison always
+reflects the current database state instead of a hardcoded snapshot
+that goes stale the next time Pull Data adds rows.
 """
 
+import os
+
+import psycopg2
+from dotenv import load_dotenv
 from sqlalchemy import and_, case, func, or_, select
 
+import query_data
 from models import Applicant, Session
 from query_data import CS_PATTERN, Q8_Q9_UNIVERSITIES
 
@@ -93,16 +105,35 @@ def main():
         q9_count = orm_q9(session)
         custom1_contaminated, custom1_total, custom1_pct = orm_custom1(session)
 
+    load_dotenv()
+    conn = psycopg2.connect(
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT"),
+        dbname=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+    )
+    try:
+        with conn.cursor() as cur:
+            raw_q1_count = query_data.q1(cur)
+            raw_q4_avg, raw_q4_n = query_data.q4(cur)
+            raw_q5_num, raw_q5_denom, raw_q5_pct = query_data.q5(cur)
+            raw_q8_count = query_data.q8(cur)
+            raw_q9_count = query_data.q9(cur)
+            raw_custom1_contaminated, raw_custom1_total, raw_custom1_pct = query_data.custom1(cur)
+    finally:
+        conn.close()
+
     checks = [
-        ("Q1", "Fall 2026 applicant count", q1_count, 32344, "{}"),
-        ("Q4", "Avg GPA, American, Fall 2026", round(q4_avg, 2), 3.79, "{:.2f}"),
-        ("Q5", "Fall 2025 acceptance %", round(q5_pct, 2), 39.30, "{:.2f}"),
-        ("Q8", "Fall 2026/Accepted/PhD/CS, original fields", q8_count, 30, "{}"),
-        ("Q9", "Same as Q8, llm-generated fields", q9_count, 26, "{}"),
-        ("Custom Q1", "GRE Quant contamination %", round(custom1_pct, 2), 60.99, "{:.2f}"),
+        ("Q1", "Fall 2026 applicant count", q1_count, raw_q1_count, "{}"),
+        ("Q4", "Avg GPA, American, Fall 2026", round(q4_avg, 2), round(raw_q4_avg, 2), "{:.2f}"),
+        ("Q5", "Fall 2025 acceptance %", round(q5_pct, 2), round(raw_q5_pct, 2), "{:.2f}"),
+        ("Q8", "Fall 2026/Accepted/PhD/CS, original fields", q8_count, raw_q8_count, "{}"),
+        ("Q9", "Same as Q8, llm-generated fields", q9_count, raw_q9_count, "{}"),
+        ("Custom Q1", "GRE Quant contamination %", round(custom1_pct, 2), round(raw_custom1_pct, 2), "{:.2f}"),
     ]
 
-    print("ORM vs. raw-SQL (query_data.py) comparison:\n")
+    print("ORM vs. raw-SQL (query_data.py) comparison, both computed live in this run:\n")
     all_match = True
     for label, description, orm_value, raw_value, fmt in checks:
         match = orm_value == raw_value
@@ -114,9 +145,9 @@ def main():
         )
 
     print()
-    print(f"Q4 n={q4_n} (raw-SQL n=11396)")
-    print(f"Q5 {q5_num}/{q5_denom} (raw-SQL 10641/27074)")
-    print(f"Custom Q1 {custom1_contaminated}/{custom1_total} (raw-SQL 2842/4660)")
+    print(f"Q4 n={q4_n} (raw-SQL n={raw_q4_n})")
+    print(f"Q5 {q5_num}/{q5_denom} (raw-SQL {raw_q5_num}/{raw_q5_denom})")
+    print(f"Custom Q1 {custom1_contaminated}/{custom1_total} (raw-SQL {raw_custom1_contaminated}/{raw_custom1_total})")
 
     print()
     if all_match:
