@@ -1,3 +1,39 @@
+## Name
+
+Vix Talbot (JHED: vtalbot1)
+
+## Overview
+
+Module 3 loads cleaned Grad Cafe applicant data (scraped and LLM-standardized
+in Module 2) into a PostgreSQL database, analyzes it via both raw SQL
+(`query_data.py`) and the SQLAlchemy ORM (`orm_queries.py`), and displays the
+results on a Flask webpage (`app.py`) with "Pull Data" (scrape new entries)
+and "Update Analysis" (re-run the analysis queries against the current
+database) functionality.
+
+## Setup / Run
+
+1. Create a `.env` file in `module_3/` defining:
+   - `DB_HOST`
+   - `DB_PORT`
+   - `DB_NAME`
+   - `DB_USER`
+   - `DB_PASSWORD`
+2. Install dependencies: `pip install -r requirements.txt`
+3. Populate the database once: `python load_data.py`
+4. Start the Flask app: `python app.py`
+
+### Pull Data precondition
+
+The "Pull Data" button on the Flask page scrapes new entries from Grad Cafe.
+It requires a Chrome browser already running with remote debugging enabled
+(`--remote-debugging-port=9222`), with Grad Cafe's Cloudflare challenge
+already manually cleared in that session. Pull Data attaches to that
+existing, already-verified session — it does not launch a browser or solve
+the challenge itself.
+
+---
+
 # Module 3 — Raw SQL vs. SQLAlchemy Comparison (Part 7)
 
 This section compares the raw-SQL and SQLAlchemy (ORM) implementations of **Question 9**: "Repeat Question 8, but identify the university and program using `llm_generated_program`/`llm_generated_university` instead of the original downloaded fields." Q9 was chosen because its regex-based, word-boundary university/program matching required dropping into PostgreSQL's `~*` operator on both sides, making it a concrete case where the two approaches diverge.
