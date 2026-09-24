@@ -13,15 +13,15 @@ database) functionality.
 
 ## Setup / Run
 
-1. Create a `.env` file in `module_3/` defining:
+1. Create a `.env` file in `module_4/` defining:
    - `DB_HOST`
    - `DB_PORT`
    - `DB_NAME`
    - `DB_USER`
    - `DB_PASSWORD`
 2. Install dependencies: `pip install -r requirements.txt`
-3. Populate the database once: `python load_data.py`
-4. Start the Flask app: `python app.py`
+3. Populate the database once: `python src/load_data.py`
+4. Start the Flask app: `python src/app.py`
 
 ### Pull Data precondition
 
