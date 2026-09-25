@@ -1,9 +1,8 @@
 """Run Q7, Q8, Q9 analysis queries against the applicants table."""
 
-import os
-
 import psycopg2
-from dotenv import load_dotenv
+
+from config import get_database_url
 
 # Word-boundary (\y) regex patterns, matched case-insensitively (~*).
 # See conversation history / query_results write-up for the false-positive
@@ -237,15 +236,7 @@ def custom2(cur):
 
 
 def main():
-    load_dotenv()
-
-    conn = psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT"),
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-    )
+    conn = psycopg2.connect(get_database_url())
 
     try:
         with conn.cursor() as cur:

@@ -1,8 +1,8 @@
-"""ORM (SQLAlchemy 2.x) versions of a subset of query_data.py's analyses.
+"""ORM (SQLAlchemy 2.x) versions of query_data.py's analyses.
 
 Reuses the exact same word-boundary regex patterns already defined in
 query_data.py for Q8/Q9 university/program matching (imported, not
-redefined), and the same Applicant model / Session from models.py. The
+redefined), and the same Applicant model / session factory from models.py. The
 ORM query functions themselves (orm_q1/orm_q4/orm_q5/orm_q8/orm_q9/
 orm_custom1) use no raw SQL (text()) or psycopg2 cursors anywhere --
 everything is expressed with select()/where()/func/and_/or_/case().
@@ -12,17 +12,26 @@ query_data.py's own raw-SQL functions (q1/q4/q5/q8/q9/custom1) live,
 via a psycopg2 cursor, so the "raw-SQL" side of the comparison always
 reflects the current database state instead of a hardcoded snapshot
 that goes stale the next time Pull Data adds rows.
+
+get_analysis() gathers every question the Flask page displays into one
+dict. Percentages over an empty set come back as None (rendered "N/A")
+instead of raising ZeroDivisionError.
 """
 
-import os
-
 import psycopg2
-from dotenv import load_dotenv
 from sqlalchemy import and_, case, func, or_, select
 
 import query_data
-from models import Applicant, Session
-from query_data import CS_PATTERN, Q8_Q9_UNIVERSITIES
+from config import get_database_url
+from models import Applicant, make_session_factory
+from query_data import CS_PATTERN, JHU_PATTERN, Q8_Q9_UNIVERSITIES
+
+
+def _percent(numerator, denominator):
+    """100 * numerator / denominator, or None when there is nothing to divide by."""
+    if not denominator:
+        return None
+    return 100.0 * numerator / denominator
 
 
 def orm_q1(session):
@@ -46,7 +55,8 @@ def orm_q5(session):
     accepted = func.sum(case((Applicant.status.ilike("Accepted"), 1), else_=0))
     stmt = select(accepted, func.count()).where(Applicant.term.ilike("Fall 2025"))
     numerator, denominator = session.execute(stmt).one()
-    return numerator, denominator, 100.0 * numerator / denominator
+    numerator = numerator or 0
+    return numerator, denominator, _percent(numerator, denominator)
 
 
 def orm_q8(session):
@@ -93,11 +103,116 @@ def orm_custom1(session):
     )
     stmt = select(contaminated, func.count()).where(Applicant.gre.isnot(None))
     contaminated_count, total = session.execute(stmt).one()
-    return contaminated_count, total, 100.0 * contaminated_count / total
+    contaminated_count = contaminated_count or 0
+    return contaminated_count, total, _percent(contaminated_count, total)
+
+
+def q2_percent_international(session):
+    """Percent international among entries with a usable nationality classification."""
+    stmt = select(
+        func.sum(case((Applicant.us_or_international.ilike("International"), 1), else_=0)),
+        func.count(),
+    ).where(
+        Applicant.us_or_international.isnot(None),
+        func.trim(Applicant.us_or_international) != "",
+    )
+    numerator, denominator = session.execute(stmt).one()
+    numerator = numerator or 0
+    return numerator, denominator, _percent(numerator, denominator)
+
+
+def q3_averages(session):
+    """Average GPA, GRE, GRE V, GRE AW, each independently, with range-filtering (see Q3 write-up)."""
+    averages = {}
+
+    stmt = select(func.avg(Applicant.gpa), func.count(Applicant.gpa)).where(Applicant.gpa.isnot(None))
+    averages["GPA"] = session.execute(stmt).one()
+
+    stmt = select(func.avg(Applicant.gre), func.count(Applicant.gre)).where(Applicant.gre.between(130, 170))
+    averages["GRE"] = session.execute(stmt).one()
+
+    stmt = select(func.avg(Applicant.gre_v), func.count(Applicant.gre_v)).where(
+        Applicant.gre_v.between(130, 170)
+    )
+    averages["GRE V"] = session.execute(stmt).one()
+
+    stmt = select(func.avg(Applicant.gre_aw), func.count(Applicant.gre_aw)).where(
+        Applicant.gre_aw.between(0, 6)
+    )
+    averages["GRE AW"] = session.execute(stmt).one()
+
+    return averages
+
+
+def q6_avg_gpa_accepted(session):
+    """Average GPA of accepted applicants who applied for Fall 2026."""
+    stmt = select(func.avg(Applicant.gpa), func.count(Applicant.gpa)).where(
+        Applicant.term.ilike("Fall 2026"),
+        Applicant.status.ilike("Accepted"),
+        Applicant.gpa.isnot(None),
+    )
+    return session.execute(stmt).one()
+
+
+def q7_jhu_masters_cs(session):
+    """JHU + master's degree + Computer Science, all-time, one combined count."""
+    stmt = select(func.count()).where(
+        Applicant.program.op("~*")(JHU_PATTERN),
+        Applicant.program.op("~*")(CS_PATTERN),
+        Applicant.degree == "Masters",
+    )
+    return session.scalar(stmt)
+
+
+def custom2_acceptance_by_degree(session):
+    """Acceptance rate by degree type (PhD vs. Masters, plus all other degree values)."""
+    accepted = func.sum(case((Applicant.status.ilike("Accepted"), 1), else_=0))
+    stmt = (
+        select(Applicant.degree, accepted, func.count())
+        .where(Applicant.degree.isnot(None))
+        .group_by(Applicant.degree)
+        .order_by(func.count().desc())
+    )
+    rows = session.execute(stmt).all()
+    return [(degree, accepted_n, total, _percent(accepted_n, total)) for degree, accepted_n, total in rows]
+
+
+def get_analysis(session):
+    """Run every question shown on the analysis page and return the results as one dict."""
+    q2_num, q2_denom, q2_pct = q2_percent_international(session)
+    q4_avg, q4_n = orm_q4(session)
+    q5_num, q5_denom, q5_pct = orm_q5(session)
+    q6_avg, q6_n = q6_avg_gpa_accepted(session)
+    q8_count = orm_q8(session)
+    q9_count = orm_q9(session)
+    custom1_contaminated, custom1_total, custom1_pct = orm_custom1(session)
+
+    return {
+        "q1_count": orm_q1(session),
+        "q2_num": q2_num,
+        "q2_denom": q2_denom,
+        "q2_pct": q2_pct,
+        "q3": q3_averages(session),
+        "q4_avg": q4_avg,
+        "q4_n": q4_n,
+        "q5_num": q5_num,
+        "q5_denom": q5_denom,
+        "q5_pct": q5_pct,
+        "q6_avg": q6_avg,
+        "q6_n": q6_n,
+        "q7_count": q7_jhu_masters_cs(session),
+        "q8_count": q8_count,
+        "q9_count": q9_count,
+        "q8_q9_diff": q8_count - q9_count,
+        "custom1_contaminated": custom1_contaminated,
+        "custom1_total": custom1_total,
+        "custom1_pct": custom1_pct,
+        "custom2_rows": custom2_acceptance_by_degree(session),
+    }
 
 
 def main():
-    with Session() as session:
+    with make_session_factory()() as session:
         q1_count = orm_q1(session)
         q4_avg, q4_n = orm_q4(session)
         q5_num, q5_denom, q5_pct = orm_q5(session)
@@ -105,14 +220,7 @@ def main():
         q9_count = orm_q9(session)
         custom1_contaminated, custom1_total, custom1_pct = orm_custom1(session)
 
-    load_dotenv()
-    conn = psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT"),
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-    )
+    conn = psycopg2.connect(get_database_url())
     try:
         with conn.cursor() as cur:
             raw_q1_count = query_data.q1(cur)

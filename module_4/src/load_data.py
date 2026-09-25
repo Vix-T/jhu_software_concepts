@@ -2,10 +2,12 @@
 
 import json
 import os
+import sys
 from datetime import datetime
 
 import psycopg2
-from dotenv import load_dotenv
+
+from config import get_database_url
 
 DATA_FILE = os.path.join(os.path.dirname(__file__), "llm_extend_applicant_data_full.json")
 
@@ -97,46 +99,62 @@ def load_records(path):
         return json.load(f)
 
 
-def main(data_file=DATA_FILE):
-    load_dotenv()
+def connect(database_url=None):
+    """Open a psycopg2 connection to database_url (default: DATABASE_URL)."""
+    return psycopg2.connect(database_url or get_database_url())
 
-    conn = psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT"),
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-    )
 
+def load_rows(records, conn):
+    """Create the applicants table if needed and insert `records` (a list of dicts).
+
+    Each insert runs inside its own SAVEPOINT, so a database error on one
+    record rolls back only that record -- rows inserted earlier in the same
+    batch stay inserted and are counted correctly. The caller owns `conn`
+    (this function commits but does not close it).
+
+    Returns:
+        tuple: (inserted, skipped_duplicates, failed), where failed is a
+            list of (record_index, reason) pairs.
+    """
     inserted = 0
     skipped_duplicates = 0
     failed = []
 
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(CREATE_TABLE_SQL)
+
+    with conn:
+        with conn.cursor() as cur:
+            for i, record in enumerate(records):
+                try:
+                    row = record_to_row(record)
+                except (ValueError, TypeError) as exc:
+                    failed.append((i, str(exc)))
+                    continue
+
+                cur.execute("SAVEPOINT load_row")
+                try:
+                    cur.execute(INSERT_SQL, row)
+                except psycopg2.Error as exc:
+                    cur.execute("ROLLBACK TO SAVEPOINT load_row")
+                    failed.append((i, str(exc).strip()))
+                    continue
+                rowcount = cur.rowcount
+                cur.execute("RELEASE SAVEPOINT load_row")
+
+                if rowcount == 1:
+                    inserted += 1
+                else:
+                    skipped_duplicates += 1
+
+    return inserted, skipped_duplicates, failed
+
+
+def main(data_file=DATA_FILE):
+    conn = connect()
     try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(CREATE_TABLE_SQL)
-
-        records = load_records(data_file)
-
-        with conn:
-            with conn.cursor() as cur:
-                for i, record in enumerate(records):
-                    try:
-                        row = record_to_row(record)
-                    except (ValueError, TypeError) as exc:
-                        failed.append((i, str(exc)))
-                        continue
-
-                    try:
-                        cur.execute(INSERT_SQL, row)
-                        if cur.rowcount == 1:
-                            inserted += 1
-                        else:
-                            skipped_duplicates += 1
-                    except psycopg2.Error as exc:
-                        conn.rollback()
-                        failed.append((i, str(exc).strip()))
+        inserted, skipped_duplicates, failed = load_rows(load_records(data_file), conn)
     finally:
         conn.close()
 
@@ -153,4 +171,4 @@ def main(data_file=DATA_FILE):
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1] if len(sys.argv) > 1 else DATA_FILE)
