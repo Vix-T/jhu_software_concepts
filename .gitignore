@@ -49,3 +49,7 @@ module_2/_test_*.json
 module_3/draft_writeups.txt
 module_3/query_results_draft.md
 module_3/limitations_draft.md
+
+# Coverage output (pytest-cov)
+.coverage
+htmlcov/

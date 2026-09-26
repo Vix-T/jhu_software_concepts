@@ -1,82 +1,50 @@
-"""Deterministic test of load_data.py's insert/dedup behavior.
+"""load_data.py end to end (JSON file -> test database): insert, dedup, bad records.
 
-Exercises the real INSERT ... ON CONFLICT (url) DO NOTHING path against
-the actual database, using a synthetic entry with a UUID-tagged URL --
-independent of whether Grad Cafe happens to have any new live entries
-on a given day.
+Uses the test database only: conftest points DATABASE_URL at
+TEST_DATABASE_URL for the whole run, which is what load_data.main()
+connects to.
 """
 
 import json
-import uuid
 
 import pytest
+from conftest import make_record
 
 import load_data
-from models import Applicant, Session
+
+pytestmark = pytest.mark.db
 
 
-def _synthetic_record(url):
-    return {
-        "Program Name": "Test Program",
-        "University": "Test University",
-        "Comments": "synthetic test entry",
-        "Date Added": "Jan 01, 2026",
-        "URL": url,
-        "Applicant Status": "Accepted",
-        "Semester and Year": "Fall 2026",
-        "International/American": "American",
-        "GRE Score": "320",
-        "GRE V Score": "160",
-        "GRE AW Score": "4.5",
-        "Masters or PhD": "PhD",
-        "GPA": "3.9",
-        "llm-generated-program": "Test Program",
-        "llm-generated-university": "Test University",
-    }
+def _write(tmp_path, records):
+    path = tmp_path / "records.json"
+    path.write_text(json.dumps(records))
+    return str(path)
 
 
-@pytest.fixture
-def synthetic_entry_file(tmp_path):
-    url = f"https://www.thegradcafe.com/test-entry-{uuid.uuid4()}"
-    path = tmp_path / "synthetic_entry.json"
-    path.write_text(json.dumps([_synthetic_record(url)]))
+def test_insert_then_dedup(tmp_path, fetch_rows):
+    record = make_record(0, **{"University": "Test University", "Program Name": "Test Program",
+                               "GPA": "3.9", "Applicant Status": "Accepted"})
+    path = _write(tmp_path, [record])
 
-    yield str(path), url
+    assert load_data.main(data_file=path) == (1, 0, [])
 
-    session = Session()
-    try:
-        session.query(Applicant).filter(Applicant.url == url).delete()
-        session.commit()
-    finally:
-        session.close()
+    rows = fetch_rows()
+    assert len(rows) == 1
+    assert rows[0]["url"] == record["URL"]
+    assert rows[0]["program"] == "Test University, Test Program"
+    assert rows[0]["status"] == "Accepted"
+    assert rows[0]["gpa"] == 3.9
 
-
-def test_insert_then_dedup(synthetic_entry_file):
-    path, url = synthetic_entry_file
-
-    inserted, skipped, failed = load_data.main(data_file=path)
-    assert (inserted, skipped, failed) == (1, 0, [])
-
-    session = Session()
-    try:
-        row = session.query(Applicant).filter(Applicant.url == url).one()
-        assert row.program == "Test University, Test Program"
-        assert row.status == "Accepted"
-        assert row.gpa == 3.9
-    finally:
-        session.close()
-
-    inserted, skipped, failed = load_data.main(data_file=path)
-    assert (inserted, skipped, failed) == (0, 1, [])
+    assert load_data.main(data_file=path) == (0, 1, [])
+    assert len(fetch_rows()) == 1
 
 
-def test_missing_url_fails_to_parse(tmp_path):
-    record = _synthetic_record(None)
+def test_missing_url_fails_to_parse(tmp_path, row_count):
+    record = make_record(0)
     del record["URL"]
-    path = tmp_path / "missing_url.json"
-    path.write_text(json.dumps([record]))
+    path = _write(tmp_path, [record])
 
-    inserted, skipped, failed = load_data.main(data_file=str(path))
-    assert inserted == 0
-    assert skipped == 0
-    assert len(failed) == 1
+    inserted, skipped, failed = load_data.main(data_file=path)
+    assert (inserted, skipped) == (0, 0)
+    assert failed == [(0, "missing URL (required as natural key)")]
+    assert row_count() == 0
