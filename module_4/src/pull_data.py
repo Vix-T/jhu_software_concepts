@@ -63,7 +63,7 @@ class PullPreconditionError(RuntimeError):
     """Raised when there is no Chrome remote-debugging session to attach to."""
 
 
-def _debugger_port_open():
+def _debugger_port_open(host=DEBUGGER_HOST, port=DEBUGGER_PORT):
     """Fast pre-flight check so a missing Chrome session fails in ~milliseconds.
 
     webdriver.Chrome() itself does not fail fast here: with nothing
@@ -76,7 +76,7 @@ def _debugger_port_open():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(3)
         try:
-            s.connect((DEBUGGER_HOST, DEBUGGER_PORT))
+            s.connect((host, port))
             return True
         except OSError:
             return False
@@ -87,17 +87,19 @@ def scrape_new_entries(
     state_file=PULL_STATE_FILE,
     captured_dir=PULL_CAPTURED_DIR,
     driver_factory=None,
+    port_check=_debugger_port_open,
     **scrape_kwargs,
 ):
     """Scrape Grad Cafe entries for a Pull Data run and return them as records.
 
     With the default driver_factory (attach to the real Chrome session), the
-    debugger port is checked first and PullPreconditionError is raised if
-    nothing is listening. A caller-supplied driver_factory skips that check,
-    since it doesn't attach to Chrome. Extra keyword arguments (e.g.
+    debugger port is checked first (port_check, default _debugger_port_open)
+    and PullPreconditionError is raised if nothing is listening. A
+    caller-supplied driver_factory skips that check, since it doesn't attach
+    to Chrome. Extra keyword arguments (e.g.
     delay_seconds, start_url) are passed through to scrape.scrape_data().
     """
-    if driver_factory is None and not _debugger_port_open():
+    if driver_factory is None and not port_check():
         raise PullPreconditionError(CLOUDFLARE_PRECONDITION_MESSAGE)
 
     return scrape_data(
@@ -130,9 +132,11 @@ def run_pull(scraper, loader):
     }
 
 
-def main():
+def main(scraper=None, loader=None):
+    """CLI entry point. scraper/loader default to scrape_new_entries and
+    load_data.load_into_database (DATABASE_URL)."""
     try:
-        result = run_pull(scrape_new_entries, load_data.load_into_database)
+        result = run_pull(scraper or scrape_new_entries, loader or load_data.load_into_database)
     except PullPreconditionError as exc:
         print(exc)
         sys.exit(1)

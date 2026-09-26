@@ -43,6 +43,7 @@ def capture_pages(
     state_file="_scrape_state.json",
     captured_dir="_captured_pages",
     driver_factory=None,
+    wait_timeout=15,
 ):
     """
     Capture raw HTML for Grad Cafe survey result pages, without parsing them.
@@ -81,6 +82,8 @@ def capture_pages(
         driver_factory: Zero-argument callable returning a Selenium
             WebDriver-like object (needs .get() and .page_source). Defaults
             to attach_to_chrome(); tests pass a fake that serves saved HTML.
+        wait_timeout: Seconds to wait for each page's results table before
+            saving the page anyway.
 
     Returns:
         int: The number of new pages captured during this call (not the
@@ -107,7 +110,7 @@ def capture_pages(
 
         def _wait_for_results_table(url):
             try:
-                WebDriverWait(driver, 15).until(
+                WebDriverWait(driver, wait_timeout).until(
                     EC.presence_of_element_located(
                         (
                             By.CSS_SELECTOR,
@@ -215,6 +218,7 @@ def scrape_data(
     batch_size=150,
     crash_retry_wait=5,
     driver_factory=None,
+    wait_timeout=15,
 ):
     """
     Scrape Grad Cafe survey results end-to-end, until target_count entries
@@ -260,6 +264,7 @@ def scrape_data(
             capture_pages() call crashes mid-batch.
         driver_factory: Passed through to capture_pages() (default:
             attach_to_chrome).
+        wait_timeout: Passed through to capture_pages().
 
     Returns:
         list: The full flat list of parsed applicant entry records.
@@ -279,6 +284,7 @@ def scrape_data(
                 state_file=state_file,
                 captured_dir=captured_dir,
                 driver_factory=driver_factory,
+                wait_timeout=wait_timeout,
             )
         except WebDriverException as exc:
             print(

@@ -245,6 +245,34 @@ def get_analysis(session):
     }
 
 
+def format_comparison(checks):
+    """Format ORM-vs-raw-SQL checks for main()'s report.
+
+    Args:
+        checks: (label, description, orm_value, raw_value, fmt) tuples.
+
+    Returns:
+        tuple: (table_lines, verdict_line) -- one line per check marked
+            [MATCH] or [MISMATCH], and the overall verdict.
+    """
+    table_lines = []
+    all_match = True
+    for label, description, orm_value, raw_value, fmt in checks:
+        match = orm_value == raw_value
+        all_match = all_match and match
+        status = "MATCH" if match else "MISMATCH"
+        table_lines.append(
+            f"{label:<10} {description:<45} "
+            f"ORM={fmt.format(orm_value):<10} raw-SQL={fmt.format(raw_value):<10} [{status}]"
+        )
+
+    if all_match:
+        verdict_line = "All ORM results match the raw-SQL results from query_data.py."
+    else:
+        verdict_line = "MISMATCH DETECTED -- see table above. Not adjusting either query to force a match."
+    return table_lines, verdict_line
+
+
 def main():
     with make_session_factory()() as session:
         q1_count = orm_q1(session)
@@ -275,16 +303,11 @@ def main():
         ("Custom Q1", "GRE Quant contamination %", round(custom1_pct, 2), round(raw_custom1_pct, 2), "{:.2f}"),
     ]
 
+    table_lines, verdict_line = format_comparison(checks)
+
     print("ORM vs. raw-SQL (query_data.py) comparison, both computed live in this run:\n")
-    all_match = True
-    for label, description, orm_value, raw_value, fmt in checks:
-        match = orm_value == raw_value
-        all_match = all_match and match
-        status = "MATCH" if match else "MISMATCH"
-        print(
-            f"{label:<10} {description:<45} "
-            f"ORM={fmt.format(orm_value):<10} raw-SQL={fmt.format(raw_value):<10} [{status}]"
-        )
+    for line in table_lines:
+        print(line)
 
     print()
     print(f"Q4 n={q4_n} (raw-SQL n={raw_q4_n})")
@@ -292,10 +315,7 @@ def main():
     print(f"Custom Q1 {custom1_contaminated}/{custom1_total} (raw-SQL {raw_custom1_contaminated}/{raw_custom1_total})")
 
     print()
-    if all_match:
-        print("All ORM results match the raw-SQL results from query_data.py.")
-    else:
-        print("MISMATCH DETECTED -- see table above. Not adjusting either query to force a match.")
+    print(verdict_line)
 
 
 if __name__ == "__main__":

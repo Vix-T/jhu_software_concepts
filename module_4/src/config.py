@@ -23,9 +23,13 @@ from dotenv import load_dotenv
 ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
 
 
-def get_database_url():
-    """Return DATABASE_URL, raising a clear error if it isn't configured."""
-    load_dotenv(ENV_FILE)
+def get_database_url(env_file=ENV_FILE):
+    """Return DATABASE_URL, raising a clear error if it isn't configured.
+
+    env_file is the .env consulted when DATABASE_URL isn't already in the
+    environment (default: module_4/.env).
+    """
+    load_dotenv(env_file)
     url = os.environ.get("DATABASE_URL")
     if not url:
         raise RuntimeError(

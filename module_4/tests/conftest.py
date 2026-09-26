@@ -20,7 +20,9 @@ import os
 
 import psycopg2
 import pytest
+from bs4 import BeautifulSoup
 from dotenv import dotenv_values
+from selenium.common.exceptions import NoSuchElementException
 from sqlalchemy.engine import make_url
 
 import load_data
@@ -28,6 +30,7 @@ from app import create_app
 from busy_state import InMemoryBusyState
 
 ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 
 _UNSET = object()
 _saved_database_url = _UNSET
@@ -190,6 +193,62 @@ class Spy:
         if self.fn is not None:
             return self.fn(*args)
         return None
+
+
+# Synthetic Grad Cafe pages (tests/fixtures/) keyed by the URL the fake driver serves them at.
+SURVEY_URL = "https://www.thegradcafe.com/survey/"
+PAGE_2_URL = "https://www.thegradcafe.com/survey/?page=2"
+SELF_LINK_URL = "https://www.thegradcafe.com/survey/?page=self"
+
+
+def load_fixture(name):
+    with open(os.path.join(FIXTURES_DIR, name), encoding="utf-8") as f:
+        return f.read()
+
+
+def survey_pages():
+    return {SURVEY_URL: load_fixture("page_1.html"), PAGE_2_URL: load_fixture("page_2.html")}
+
+
+class FakeDriver:
+    """Stands in for a Selenium WebDriver: serves fixture HTML by URL, no browser or network.
+
+    find_element() answers CSS lookups against the current page and raises
+    Selenium's NoSuchElementException when nothing matches, so scrape.py's
+    real WebDriverWait logic runs unchanged against it.
+    """
+
+    def __init__(self, pages):
+        self.pages = pages
+        self.visited = []
+        self.page_source = ""
+
+    def get(self, url):
+        self.visited.append(url)
+        self.page_source = self.pages[url]
+
+    def find_element(self, by, value):
+        element = BeautifulSoup(self.page_source, "html.parser").select_one(value)
+        if element is None:
+            raise NoSuchElementException(f"no element matches {value!r}")
+        return element
+
+
+class DriverFactory:
+    """driver_factory for scrape.py: hands out one FakeDriver per call and records the calls."""
+
+    def __init__(self, pages):
+        self.drivers = []
+        self.pages = pages
+
+    def __call__(self):
+        driver = FakeDriver(self.pages)
+        self.drivers.append(driver)
+        return driver
+
+    @property
+    def visited(self):
+        return [url for driver in self.drivers for url in driver.visited]
 
 
 @pytest.fixture
