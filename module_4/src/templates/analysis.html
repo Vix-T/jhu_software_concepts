@@ -11,24 +11,16 @@
     <p class="subtitle">SQL/ORM query results, computed live from the <code>applicants</code> table.</p>
 
     <div class="actions">
-      <form method="post" action="{{ url_for('pull_data') }}">
-        <button type="submit">Pull Data</button>
-        <span class="action-note">Requires an already-verified Chrome remote-debugging session — see README.txt</span>
-      </form>
-      <form method="post" action="{{ url_for('update_analysis') }}">
-        <button type="submit">Update Analysis</button>
-      </form>
+      <button type="button" data-testid="pull-data-btn" data-action-url="{{ url_for('pull_data') }}">Pull Data</button>
+      <span class="action-note">Requires an already-verified Chrome remote-debugging session — see README.md</span>
+      <button type="button" data-testid="update-analysis-btn" data-action-url="{{ url_for('update_analysis') }}">Update Analysis</button>
     </div>
 
-    {% with messages = get_flashed_messages() %}
-      {% if messages %}
-      <ul class="flash-messages">
-        {% for message in messages %}
-        <li>{{ message }}</li>
-        {% endfor %}
-      </ul>
-      {% endif %}
-    {% endwith %}
+    <p class="action-status" data-testid="action-status" role="status" aria-live="polite"></p>
+
+    {% if refreshed_at %}
+    <p class="refreshed-at">Analysis last updated: {{ refreshed_at }}</p>
+    {% endif %}
 
     {% if pull_status.running %}
     <div class="status-banner">
@@ -41,18 +33,19 @@
     <section class="question">
       <h2>Q1</h2>
       <p class="prompt">How many entries are from applicants who applied for Fall 2026?</p>
-      <p class="result">Fall 2026 applicant count: <strong>{{ q1_count }}</strong></p>
+      <p class="result"><span class="answer-label">Answer:</span> Fall 2026 applicant count: <strong>{{ q1_count }}</strong></p>
     </section>
 
     <section class="question">
       <h2>Q2</h2>
       <p class="prompt">Among entries that provide a nationality classification, what percentage are international students?</p>
-      <p class="result">Percent international: <strong>{{ q2_pct|percent }}</strong> ({{ q2_num }}/{{ q2_denom }} entries with a usable classification)</p>
+      <p class="result"><span class="answer-label">Answer:</span> Percent international: <strong>{{ q2_pct|percent }}</strong> ({{ q2_num }}/{{ q2_denom }} entries with a usable classification)</p>
     </section>
 
     <section class="question">
       <h2>Q3</h2>
       <p class="prompt">What are the average GPA, GRE (Quantitative), GRE Verbal, and GRE Analytical Writing scores of applicants who provide each metric?</p>
+      <p class="result"><span class="answer-label">Answer:</span></p>
       <ul class="result-list">
         {% for label, (avg, count) in q3.items() %}
         <li>Average {{ label }}: <strong>{{ avg|two_decimals }}</strong> (n={{ count }})</li>
@@ -63,48 +56,49 @@
     <section class="question">
       <h2>Q4</h2>
       <p class="prompt">What is the average GPA of American applicants who applied for Fall 2026?</p>
-      <p class="result">Average GPA, American applicants, Fall 2026: <strong>{{ q4_avg|two_decimals }}</strong> (n={{ q4_n }})</p>
+      <p class="result"><span class="answer-label">Answer:</span> Average GPA, American applicants, Fall 2026: <strong>{{ q4_avg|two_decimals }}</strong> (n={{ q4_n }})</p>
     </section>
 
     <section class="question">
       <h2>Q5</h2>
       <p class="prompt">What percentage of Fall 2025 entries are acceptances?</p>
-      <p class="result">Fall 2025 acceptance percentage: <strong>{{ q5_pct|percent }}</strong> ({{ q5_num }}/{{ q5_denom }} entries)</p>
+      <p class="result"><span class="answer-label">Answer:</span> Fall 2025 acceptance percentage: <strong>{{ q5_pct|percent }}</strong> ({{ q5_num }}/{{ q5_denom }} entries)</p>
     </section>
 
     <section class="question">
       <h2>Q6</h2>
       <p class="prompt">What is the average GPA of accepted applicants who applied for Fall 2026?</p>
-      <p class="result">Average GPA, accepted applicants, Fall 2026: <strong>{{ q6_avg|two_decimals }}</strong> (n={{ q6_n }})</p>
+      <p class="result"><span class="answer-label">Answer:</span> Average GPA, accepted applicants, Fall 2026: <strong>{{ q6_avg|two_decimals }}</strong> (n={{ q6_n }})</p>
     </section>
 
     <section class="question">
       <h2>Q7</h2>
       <p class="prompt">How many entries are from applicants who applied to Johns Hopkins University for a master's degree in Computer Science?</p>
-      <p class="result">Count: <strong>{{ q7_count }}</strong></p>
+      <p class="result"><span class="answer-label">Answer:</span> Count: <strong>{{ q7_count }}</strong></p>
     </section>
 
     <section class="question">
       <h2>Q8</h2>
       <p class="prompt">How many Fall 2026 entries are acceptances from applicants applying for a PhD in Computer Science at Georgetown, MIT, Stanford, or Carnegie Mellon? (original fields)</p>
-      <p class="result">Count: <strong>{{ q8_count }}</strong></p>
+      <p class="result"><span class="answer-label">Answer:</span> Count: <strong>{{ q8_count }}</strong></p>
     </section>
 
     <section class="question">
       <h2>Q9</h2>
       <p class="prompt">Repeat Q8 using <code>llm_generated_program</code>/<code>llm_generated_university</code> instead of the original fields.</p>
-      <p class="result">Q8 count: <strong>{{ q8_count }}</strong> &nbsp;|&nbsp; Q9 count: <strong>{{ q9_count }}</strong> &nbsp;|&nbsp; Difference: <strong>{{ q8_q9_diff }}</strong></p>
+      <p class="result"><span class="answer-label">Answer:</span> Q8 count: <strong>{{ q8_count }}</strong> &nbsp;|&nbsp; Q9 count: <strong>{{ q9_count }}</strong> &nbsp;|&nbsp; Difference: <strong>{{ q8_q9_diff }}</strong></p>
     </section>
 
     <section class="question">
       <h2>Custom Question 1</h2>
       <p class="prompt">What percentage of GRE Quantitative score submissions are contaminated with misplaced-value or sentinel-style entries (outside the plausible 130&ndash;170 range)?</p>
-      <p class="result">Contamination rate: <strong>{{ custom1_pct|percent }}</strong> ({{ custom1_contaminated }}/{{ custom1_total }} entries)</p>
+      <p class="result"><span class="answer-label">Answer:</span> Contamination rate: <strong>{{ custom1_pct|percent }}</strong> ({{ custom1_contaminated }}/{{ custom1_total }} entries)</p>
     </section>
 
     <section class="question">
       <h2>Custom Question 2</h2>
       <p class="prompt">What is the acceptance rate for each degree type, and how does PhD compare to Master's specifically?</p>
+      <p class="result"><span class="answer-label">Answer:</span></p>
       <table>
         <thead>
           <tr><th>Degree</th><th>Accepted</th><th>Total</th><th>Acceptance rate</th></tr>
@@ -122,5 +116,52 @@
       </table>
     </section>
   </main>
+
+  <script>
+    (function () {
+      const statusEl = document.querySelector('[data-testid="action-status"]');
+      const buttons = document.querySelectorAll("[data-action-url]");
+
+      const successMessages = {
+        200: (body) =>
+          body.inserted === undefined
+            ? "Analysis updated."
+            : `Pull complete: ${body.inserted} new entries inserted.`,
+        202: () =>
+          "Pull started in the background. Click Update Analysis once it finishes to refresh the numbers.",
+      };
+
+      async function runAction(button) {
+        buttons.forEach((b) => (b.disabled = true));
+        statusEl.textContent = "Working…";
+        let response;
+        let body = {};
+        try {
+          response = await fetch(button.dataset.actionUrl, {
+            method: "POST",
+            headers: { Accept: "application/json" },
+          });
+          body = await response.json().catch(() => ({}));
+        } catch (err) {
+          statusEl.textContent = `Request failed: ${err}`;
+          buttons.forEach((b) => (b.disabled = false));
+          return;
+        }
+
+        if (response.status === 409) {
+          statusEl.textContent = "Busy: pull in progress. Please wait and try again.";
+        } else if (successMessages[response.status]) {
+          statusEl.textContent = successMessages[response.status](body);
+          setTimeout(() => window.location.reload(), 1200);
+          return;
+        } else {
+          statusEl.textContent = `Error (${response.status}): ${body.error || "request failed"}`;
+        }
+        buttons.forEach((b) => (b.disabled = false));
+      }
+
+      buttons.forEach((button) => button.addEventListener("click", () => runAction(button)));
+    })();
+  </script>
 </body>
 </html>

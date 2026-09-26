@@ -3,28 +3,47 @@
 All database reads go through the SQLAlchemy Applicant model (models.py);
 every question on the page is computed by orm_queries.get_analysis(), with
 no raw SQL / text() anywhere in this file.
+
+create_app() builds the app; there is no module-level app. Every external
+dependency is injectable so tests can substitute fakes:
+
+    scraper        () -> list[dict]; when given, Pull Data runs in-process
+                   (run_pull) and answers 200. When None, Pull Data launches
+                   pull_data.py as a background subprocess and answers 202.
+    loader         (records) -> (inserted, skipped, failed); default loads
+                   into DATABASE_URL via load_data.load_into_database().
+    analysis_fn    () -> dict of analysis results; default runs
+                   get_analysis() against DATABASE_URL.
+    refresh_fn     () -> None; what Update Analysis runs. Default recomputes
+                   the analysis snapshot the page displays.
+    busy_state     try_acquire/set_owner/release/is_busy/status (busy_state.py);
+                   default FileLockBusyState on src/.scrape_lock.
+    pull_launcher  () -> process with a .pid; default
+                   starts pull_data.py with subprocess.Popen.
+
+The page shows a cached analysis snapshot: it is computed on the first
+page load and recomputed only when Update Analysis runs, so newly pulled
+rows appear once Update Analysis is clicked.
 """
 
 import os
 import subprocess
 import sys
-import threading
+from datetime import datetime, timezone
 
-from flask import Flask, flash, redirect, render_template, url_for
+from flask import Flask, jsonify, render_template
 
-import scrape_lock
+import load_data
+from busy_state import FileLockBusyState
 from models import make_session_factory
 from orm_queries import get_analysis
+from pull_data import run_pull
 
-app = Flask(__name__)
-app.secret_key = os.urandom(24)
-
-Session = make_session_factory()
-
-PULL_DATA_SCRIPT = os.path.join(os.path.dirname(__file__), "pull_data.py")
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+PULL_DATA_SCRIPT = os.path.join(SRC_DIR, "pull_data.py")
+LOCK_PATH = os.path.join(SRC_DIR, ".scrape_lock")
 
 
-@app.template_filter("two_decimals")
 def two_decimals(value):
     """Format a number with exactly 2 decimals, or "N/A" when there is no value."""
     if value is None:
@@ -32,7 +51,6 @@ def two_decimals(value):
     return f"{value:.2f}"
 
 
-@app.template_filter("percent")
 def percent(value):
     """Format a percentage with exactly 2 decimals and a % sign, or "N/A" when there is no value."""
     if value is None:
@@ -40,56 +58,115 @@ def percent(value):
     return f"{value:.2f}%"
 
 
-def _wait_and_release(proc):
-    proc.wait()
-    scrape_lock.release()
+def create_app(
+    config=None,
+    *,
+    scraper=None,
+    loader=None,
+    analysis_fn=None,
+    refresh_fn=None,
+    busy_state=None,
+    pull_launcher=None,
+):
+    """Build the Flask app. See the module docstring for the injectable dependencies.
 
-
-@app.route("/pull-data", methods=["POST"])
-def pull_data():
-    status = scrape_lock.get_status()
-    if status["running"]:
-        flash(f"A data pull is already in progress (started {status['started_at']}) — please wait.")
-        return redirect(url_for("analysis"))
-
-    proc = subprocess.Popen([sys.executable, PULL_DATA_SCRIPT], cwd=os.path.dirname(__file__))
-
-    if not scrape_lock.try_acquire(proc.pid):
-        # Lost an extremely unlikely race against another request; don't
-        # leave this subprocess orphaned and untracked.
-        proc.terminate()
-        flash("A data pull is already in progress — please wait.")
-        return redirect(url_for("analysis"))
-
-    threading.Thread(target=_wait_and_release, args=(proc,), daemon=True).start()
-    flash(
-        "Data pull started — this requires a Chrome browser already running with "
-        "remote debugging enabled and Grad Cafe's Cloudflare challenge already "
-        "manually cleared in that session (see README.txt). Click Update Analysis "
-        "later to refresh the numbers below."
+    config keys: SECRET_KEY (else the SECRET_KEY env var, else random),
+    DATABASE_URL (else config.get_database_url()), BUSY_LOCK_PATH, plus any
+    standard Flask setting such as TESTING.
+    """
+    config = dict(config or {})
+    app = Flask(__name__)
+    app.config["SECRET_KEY"] = (
+        config.pop("SECRET_KEY", None) or os.environ.get("SECRET_KEY") or os.urandom(24)
     )
-    return redirect(url_for("analysis"))
+    app.config.update(config)
+    app.add_template_filter(two_decimals, "two_decimals")
+    app.add_template_filter(percent, "percent")
 
+    database_url = app.config.get("DATABASE_URL")
 
-@app.route("/update-analysis", methods=["POST"])
-def update_analysis():
-    status = scrape_lock.get_status()
-    if status["running"]:
-        flash(f"A data pull is currently in progress (started {status['started_at']}) — showing current data.")
-    else:
-        flash("Analysis refreshed.")
-    return redirect(url_for("analysis"))
+    if busy_state is None:
+        busy_state = FileLockBusyState(app.config.get("BUSY_LOCK_PATH", LOCK_PATH))
 
+    if analysis_fn is None:
+        session_factory = make_session_factory(database_url)
 
-@app.route("/")
-def analysis():
-    pull_status = scrape_lock.get_status()
+        def analysis_fn():
+            with session_factory() as session:
+                return get_analysis(session)
 
-    with Session() as session:
-        analysis_data = get_analysis(session)
+    if loader is None:
 
-    return render_template("analysis.html", pull_status=pull_status, **analysis_data)
+        def loader(records):
+            return load_data.load_into_database(records, database_url)
+
+    if pull_launcher is None:
+
+        def pull_launcher():
+            env = dict(os.environ)
+            if database_url:
+                env["DATABASE_URL"] = database_url
+            return subprocess.Popen([sys.executable, PULL_DATA_SCRIPT], cwd=SRC_DIR, env=env)
+
+    snapshot = {"data": None, "refreshed_at": None}
+
+    def refresh_analysis():
+        snapshot["data"] = analysis_fn()
+        snapshot["refreshed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    if refresh_fn is None:
+        refresh_fn = refresh_analysis
+
+    @app.route("/")
+    @app.route("/analysis")
+    def analysis():
+        if snapshot["data"] is None:
+            refresh_analysis()
+        return render_template(
+            "analysis.html",
+            pull_status=busy_state.status(),
+            refreshed_at=snapshot["refreshed_at"],
+            **snapshot["data"],
+        )
+
+    @app.route("/pull-data", methods=["POST"])
+    def pull_data():
+        if busy_state.is_busy():
+            return jsonify(busy=True), 409
+
+        # Acquire before launching anything: the app's own PID holds the
+        # lock until the subprocess exists, then ownership moves to it.
+        if not busy_state.try_acquire(os.getpid()):
+            return jsonify(busy=True), 409
+
+        if scraper is None:
+            try:
+                proc = pull_launcher()
+            except Exception as exc:  # e.g. OSError starting the interpreter
+                busy_state.release()
+                app.logger.exception("Launching Pull Data failed")
+                return jsonify(ok=False, error=str(exc) or type(exc).__name__), 500
+            busy_state.set_owner(proc.pid)
+            return jsonify(ok=True), 202
+
+        try:
+            result = run_pull(scraper, loader)
+        except Exception as exc:  # any scrape/load failure is reported to the client
+            app.logger.exception("Pull Data failed")
+            return jsonify(ok=False, error=str(exc) or type(exc).__name__), 500
+        finally:
+            busy_state.release()
+        return jsonify(ok=True, inserted=result["inserted"]), 200
+
+    @app.route("/update-analysis", methods=["POST"])
+    def update_analysis():
+        if busy_state.is_busy():
+            return jsonify(busy=True), 409
+        refresh_fn()
+        return jsonify(ok=True), 200
+
+    return app
 
 
 if __name__ == "__main__":
-    app.run(debug=True, threaded=True)
+    create_app().run(debug=True, threaded=True)

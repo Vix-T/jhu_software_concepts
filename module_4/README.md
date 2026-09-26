@@ -13,15 +13,20 @@ database) functionality.
 
 ## Setup / Run
 
-1. Create a `.env` file in `module_4/` defining:
-   - `DB_HOST`
-   - `DB_PORT`
-   - `DB_NAME`
-   - `DB_USER`
-   - `DB_PASSWORD`
+1. Create a `.env` file in `module_4/` defining `DATABASE_URL`:
+   ```
+   DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DBNAME
+   ```
+   The password is optional for local trust authentication
+   (`postgresql://USER@localhost:5432/DBNAME`). A `DATABASE_URL` already set
+   in the environment takes precedence over `.env`.
 2. Install dependencies: `pip install -r requirements.txt`
 3. Populate the database once: `python src/load_data.py`
 4. Start the Flask app: `python src/app.py`
+5. Run the tests from the repository root:
+   ```
+   pytest -c module_4/pytest.ini module_4/tests
+   ```
 
 ### Pull Data precondition
 

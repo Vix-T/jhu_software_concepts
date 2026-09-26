@@ -109,8 +109,11 @@ def load_rows(records, conn):
 
     Each insert runs inside its own SAVEPOINT, so a database error on one
     record rolls back only that record -- rows inserted earlier in the same
-    batch stay inserted and are counted correctly. The caller owns `conn`
-    (this function commits but does not close it).
+    batch stay inserted and are counted correctly. All inserts share one
+    transaction, committed only after the last record: any other exception
+    raised mid-batch propagates out of `with conn:`, which rolls back the
+    whole batch, so an unexpected failure never leaves partial writes. The
+    caller owns `conn` (this function commits but does not close it).
 
     Returns:
         tuple: (inserted, skipped_duplicates, failed), where failed is a
@@ -151,12 +154,20 @@ def load_rows(records, conn):
     return inserted, skipped_duplicates, failed
 
 
-def main(data_file=DATA_FILE):
-    conn = connect()
+def load_into_database(records, database_url=None):
+    """Open a connection, load_rows() `records` into it, and close it.
+
+    Returns load_rows()'s (inserted, skipped_duplicates, failed) tuple.
+    """
+    conn = connect(database_url)
     try:
-        inserted, skipped_duplicates, failed = load_rows(load_records(data_file), conn)
+        return load_rows(records, conn)
     finally:
         conn.close()
+
+
+def main(data_file=DATA_FILE):
+    inserted, skipped_duplicates, failed = load_into_database(load_records(data_file))
 
     print("Load summary:")
     print(f"  Inserted:           {inserted}")

@@ -41,6 +41,9 @@ module_2/_test_*.json
 */_pull_data_state.json
 */_pull_data_pages/
 */_pull_data_new_entries.json
+*/src/.scrape_lock
+*/src/_pull_data_state.json
+*/src/_pull_data_pages/
 
 # Draft/scratch write-up material (not final deliverables)
 module_3/draft_writeups.txt

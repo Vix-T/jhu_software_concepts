@@ -1,8 +1,18 @@
-"""Standalone worker: scrape new Grad Cafe entries and load them into the DB.
+"""Pull Data: scrape new Grad Cafe entries and load them into the DB.
 
-Launched as a background subprocess by app.py's "Pull Data" route (see
-scrape_lock.py for the locking mechanism that prevents two of these from
-running at once). Deliberately does NOT run the LLM-cleaning step -- newly
+Split into two injectable pieces plus a thin CLI:
+
+- scrape_new_entries(...) -> list[dict]: the scraper (Selenium attach via
+  scrape.py; its driver_factory seam lets tests substitute a fake driver).
+- run_pull(scraper, loader) -> dict: calls scraper(), hands the records to
+  loader(records) -> (inserted, skipped, failed), and returns the counts.
+  app.py's in-process Pull Data path calls this directly with injected
+  callables.
+- main(): the CLI app.py's default Pull Data route launches as a background
+  subprocess (see busy_state.py for the lock that prevents two pulls from
+  running at once).
+
+Pull Data deliberately does NOT run the LLM-cleaning step -- newly
 scraped rows are loaded with llm_generated_program/llm_generated_university
 left NULL. LLM cleaning stays a separate, later, manual step (clean.py),
 consistent with how this pipeline has worked throughout the project.
@@ -16,7 +26,6 @@ the challenge itself. If that precondition isn't met, it fails fast with
 an explanatory message instead of hanging.
 """
 
-import json
 import os
 import socket
 import sys
@@ -29,7 +38,6 @@ from scrape import scrape_data
 BASE_DIR = os.path.dirname(__file__)
 PULL_STATE_FILE = os.path.join(BASE_DIR, "_pull_data_state.json")
 PULL_CAPTURED_DIR = os.path.join(BASE_DIR, "_pull_data_pages")
-PULL_ENTRIES_FILE = os.path.join(BASE_DIR, "_pull_data_new_entries.json")
 
 # A bounded, "check for what's new" pull -- not the original historical
 # backfill's target_count=60000. Already-seen entries are silently skipped
@@ -51,6 +59,10 @@ CLOUDFLARE_PRECONDITION_MESSAGE = (
 )
 
 
+class PullPreconditionError(RuntimeError):
+    """Raised when there is no Chrome remote-debugging session to attach to."""
+
+
 def _debugger_port_open():
     """Fast pre-flight check so a missing Chrome session fails in ~milliseconds.
 
@@ -70,17 +82,60 @@ def _debugger_port_open():
             return False
 
 
-def main():
-    if not _debugger_port_open():
-        print(CLOUDFLARE_PRECONDITION_MESSAGE)
-        sys.exit(1)
+def scrape_new_entries(
+    target_count=TARGET_COUNT,
+    state_file=PULL_STATE_FILE,
+    captured_dir=PULL_CAPTURED_DIR,
+    driver_factory=None,
+    **scrape_kwargs,
+):
+    """Scrape Grad Cafe entries for a Pull Data run and return them as records.
 
+    With the default driver_factory (attach to the real Chrome session), the
+    debugger port is checked first and PullPreconditionError is raised if
+    nothing is listening. A caller-supplied driver_factory skips that check,
+    since it doesn't attach to Chrome. Extra keyword arguments (e.g.
+    delay_seconds, start_url) are passed through to scrape.scrape_data().
+    """
+    if driver_factory is None and not _debugger_port_open():
+        raise PullPreconditionError(CLOUDFLARE_PRECONDITION_MESSAGE)
+
+    return scrape_data(
+        target_count=target_count,
+        state_file=state_file,
+        captured_dir=captured_dir,
+        driver_factory=driver_factory,
+        **scrape_kwargs,
+    )
+
+
+def run_pull(scraper, loader):
+    """Scrape, then load. Exceptions from either step propagate to the caller.
+
+    Args:
+        scraper: Zero-argument callable returning a list of record dicts.
+        loader: Callable taking that list and returning
+            (inserted, skipped_duplicates, failed) like load_data.load_rows().
+
+    Returns:
+        dict: {"scraped": int, "inserted": int, "skipped": int, "failed": list}
+    """
+    entries = scraper()
+    inserted, skipped, failed = loader(entries)
+    return {
+        "scraped": len(entries),
+        "inserted": inserted,
+        "skipped": skipped,
+        "failed": failed,
+    }
+
+
+def main():
     try:
-        entries = scrape_data(
-            target_count=TARGET_COUNT,
-            state_file=PULL_STATE_FILE,
-            captured_dir=PULL_CAPTURED_DIR,
-        )
+        result = run_pull(scrape_new_entries, load_data.load_into_database)
+    except PullPreconditionError as exc:
+        print(exc)
+        sys.exit(1)
     except WebDriverException as exc:
         # The port was open (something is listening), but Selenium still
         # couldn't attach/negotiate a session with it -- a different,
@@ -89,14 +144,9 @@ def main():
         print(f"Underlying error: {exc}")
         sys.exit(1)
 
-    with open(PULL_ENTRIES_FILE, "w", encoding="utf-8") as f:
-        json.dump(entries, f)
-
-    inserted, skipped, failed = load_data.main(data_file=PULL_ENTRIES_FILE)
-
     print(
-        f"Pull complete: {len(entries)} entries scraped, {inserted} inserted, "
-        f"{skipped} already present, {len(failed)} failed to parse."
+        f"Pull complete: {result['scraped']} entries scraped, {result['inserted']} inserted, "
+        f"{result['skipped']} already present, {len(result['failed'])} failed to parse."
     )
 
 

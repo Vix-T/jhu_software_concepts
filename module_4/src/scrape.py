@@ -21,6 +21,20 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+DEBUGGER_ADDRESS = "127.0.0.1:9222"
+
+
+def attach_to_chrome():
+    """Default driver factory: attach to an already-running, verified Chrome session.
+
+    Grad Cafe sits behind a Cloudflare challenge that must be cleared
+    manually, so the scraper never launches its own browser; it attaches
+    to one started with --remote-debugging-port=9222.
+    """
+    options = Options()
+    options.add_experimental_option("debuggerAddress", DEBUGGER_ADDRESS)
+    return webdriver.Chrome(options=options)
+
 
 def capture_pages(
     start_url="https://www.thegradcafe.com/survey/",
@@ -28,6 +42,7 @@ def capture_pages(
     delay_seconds=2.5,
     state_file="_scrape_state.json",
     captured_dir="_captured_pages",
+    driver_factory=None,
 ):
     """
     Capture raw HTML for Grad Cafe survey result pages, without parsing them.
@@ -63,6 +78,9 @@ def capture_pages(
             state (next_url, pages_captured).
         captured_dir: Directory to save each captured page's raw HTML
             into, as page_00001.html, page_00002.html, etc.
+        driver_factory: Zero-argument callable returning a Selenium
+            WebDriver-like object (needs .get() and .page_source). Defaults
+            to attach_to_chrome(); tests pass a fake that serves saved HTML.
 
     Returns:
         int: The number of new pages captured during this call (not the
@@ -85,9 +103,7 @@ def capture_pages(
     if next_url is None:
         stop_reason = "no next-page link found (already at the last page)"
     else:
-        options = Options()
-        options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
-        driver = webdriver.Chrome(options=options)
+        driver = (driver_factory or attach_to_chrome)()
 
         def _wait_for_results_table(url):
             try:
@@ -198,6 +214,7 @@ def scrape_data(
     captured_dir="_captured_pages",
     batch_size=150,
     crash_retry_wait=5,
+    driver_factory=None,
 ):
     """
     Scrape Grad Cafe survey results end-to-end, until target_count entries
@@ -241,6 +258,8 @@ def scrape_data(
             call.
         crash_retry_wait: Seconds to wait before retrying after a
             capture_pages() call crashes mid-batch.
+        driver_factory: Passed through to capture_pages() (default:
+            attach_to_chrome).
 
     Returns:
         list: The full flat list of parsed applicant entry records.
@@ -259,6 +278,7 @@ def scrape_data(
                 delay_seconds=delay_seconds,
                 state_file=state_file,
                 captured_dir=captured_dir,
+                driver_factory=driver_factory,
             )
         except WebDriverException as exc:
             print(

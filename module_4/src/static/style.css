@@ -36,13 +36,6 @@ header h1 {
   margin-bottom: 12px;
 }
 
-.actions form {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0;
-}
-
 .actions button {
   background: #1a4d8f;
   color: #ffffff;
@@ -57,25 +50,27 @@ header h1 {
   background: #123a6e;
 }
 
+.actions button:disabled {
+  background: #8a9bb0;
+  cursor: wait;
+}
+
 .action-note {
   color: #6b7885;
   font-size: 0.8rem;
 }
 
-.flash-messages {
-  list-style: none;
+.action-status {
+  min-height: 1.2em;
   margin: 0 0 12px 0;
-  padding: 0;
+  color: #10243e;
+  font-size: 0.9rem;
 }
 
-.flash-messages li {
-  background: #eef3f8;
-  border: 1px solid #c8d6e5;
-  color: #10243e;
-  padding: 8px 14px;
-  border-radius: 6px;
-  margin-bottom: 6px;
-  font-size: 0.9rem;
+.refreshed-at {
+  margin: 0 0 12px 0;
+  color: #55606b;
+  font-size: 0.85rem;
 }
 
 .status-banner {
@@ -119,6 +114,11 @@ main {
 .result {
   margin: 0;
   font-size: 1rem;
+}
+
+.answer-label {
+  font-weight: 600;
+  color: #1a4d8f;
 }
 
 .result-list {

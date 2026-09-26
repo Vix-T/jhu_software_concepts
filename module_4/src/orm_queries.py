@@ -177,6 +177,40 @@ def custom2_acceptance_by_degree(session):
     return [(degree, accepted_n, total, _percent(accepted_n, total)) for degree, accepted_n, total in rows]
 
 
+APPLICANT_FIELDS = (
+    "p_id",
+    "program",
+    "comments",
+    "date_added",
+    "url",
+    "status",
+    "term",
+    "us_or_international",
+    "gpa",
+    "gre",
+    "gre_v",
+    "gre_aw",
+    "degree",
+    "llm_generated_program",
+    "llm_generated_university",
+)
+
+
+def get_applicants(session, limit=None):
+    """Return applicant rows as dicts keyed by the applicants-table column names.
+
+    Rows are ordered by p_id (insertion order). `limit` caps the number
+    returned; None returns every row.
+    """
+    stmt = select(Applicant).order_by(Applicant.p_id)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return [
+        {field: getattr(applicant, field) for field in APPLICANT_FIELDS}
+        for applicant in session.scalars(stmt)
+    ]
+
+
 def get_analysis(session):
     """Run every question shown on the analysis page and return the results as one dict."""
     q2_num, q2_denom, q2_pct = q2_percent_international(session)
