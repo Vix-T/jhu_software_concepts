@@ -18,7 +18,7 @@ included inside that folder.
   program/university names. See `module_2/README.txt` for setup, approach,
   and known limitations.
 
-  - **[module_3](./module_3)** — PostgreSQL database and dynamic Flask
+- **[module_3](./module_3)** — PostgreSQL database and dynamic Flask
   webpage for analyzing the Module 2 Grad Cafe dataset, with both raw
   SQL and a SQLAlchemy ORM layer answering the same set of questions,
   plus "Pull Data" (trigger a new scrape) and "Update Analysis"
@@ -26,7 +26,7 @@ included inside that folder.
   `module_3/README.md` for setup, run instructions, and a SQL-vs-ORM
   comparison.
 
-  - **[module_4](./module_4)** — Automated testing and documentation for the
+- **[module_4](./module_4)** — Automated testing and documentation for the
   Module 3 Grad Cafe analytics app. The code was refactored for testability
   (a `create_app` factory, dependency-injected scraper/loader/busy-state, and
   a single `DATABASE_URL` setting), then covered by a marked Pytest suite at
