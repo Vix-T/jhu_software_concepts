@@ -4,36 +4,60 @@ Vix Talbot (JHED: vtalbot1)
 
 ## Overview
 
-Module 3 loads cleaned Grad Cafe applicant data (scraped and LLM-standardized
-in Module 2) into a PostgreSQL database, analyzes it via both raw SQL
-(`query_data.py`) and the SQLAlchemy ORM (`orm_queries.py`), and displays the
-results on a Flask webpage (`app.py`) with "Pull Data" (scrape new entries)
-and "Update Analysis" (re-run the analysis queries against the current
-database) functionality.
+Module 4 takes the Module 3 Grad Café analytics app and makes it testable,
+tested and documented. The app loads cleaned Grad Café applicant data
+(scraped and LLM-standardized in Module 2) into PostgreSQL, answers a fixed
+set of questions with both raw SQL (`query_data.py`) and the SQLAlchemy ORM
+(`orm_queries.py`), and shows them on a Flask page (`app.py`) with "Pull
+Data" (fetch the newest entries) and "Update Analysis" (recompute the
+answers) buttons.
 
-## Setup / Run (fresh clone)
+For Module 4 the code was refactored around a `create_app()` factory with
+injectable dependencies (scraper, loader, busy state, analysis), covered by
+a marked pytest suite at 100% statement coverage that runs against an
+isolated test database with fakes instead of a browser or network, checked
+in GitHub Actions CI, and documented with Sphinx on Read the Docs.
 
-These steps reproduce the populated database from the dataset bundled in
-the repo (`module_4/data/llm_extend_applicant_data_full.json.gz`, the cleaned
-Module 2 data, gzipped from 50.5 MB to 4.0 MB).
+**Documentation:** https://jhu-software-concepts-vtalbot1.readthedocs.io
 
-1. Clone the repository and change into it:
-   ```
-   git clone https://github.com/Vix-T/jhu_software_concepts.git
-   cd jhu_software_concepts
-   ```
-2. Install dependencies (Python 3.12):
-   ```
-   python -m pip install -r module_4/requirements.txt
-   ```
-3. Create two PostgreSQL databases: one for the app and one for the tests.
-   The test database's name must end in `_test`; the test suite refuses to
-   run against anything else.
+## Deliverables
+
+| Deliverable | Location |
+|---|---|
+| Application source | `module_4/src/` |
+| Test suite (135 tests, all marked) | `module_4/tests/` |
+| Coverage report (100%) | `module_4/coverage_summary.txt` |
+| CI workflow | `.github/workflows/tests.yml` (repository root) |
+| Green CI run screenshot | `module_4/actions_success.png` |
+| Sphinx source | `module_4/docs/source/` |
+| Built HTML documentation | `module_4/docs/build/html/` (open `index.html`) |
+| Read the Docs configuration | `.readthedocs.yaml` (repository root) |
+| Dependencies (app, tests, coverage, docs) | `module_4/requirements.txt` |
+
+## Set up the project
+
+Requires Python 3.12 and PostgreSQL (developed against 15, tested in CI
+against 16).
+
+```
+git clone https://github.com/Vix-T/jhu_software_concepts.git
+cd jhu_software_concepts
+python -m pip install -r module_4/requirements.txt
+```
+
+`requirements.txt` covers the app, the tests and coverage, and the Sphinx
+documentation build.
+
+## Configure PostgreSQL
+
+1. Create two databases: one for the app and one for the tests. The test
+   database's name must end in `_test`; the test suite refuses to run
+   against anything else, which protects your app data.
    ```
    createdb jhu_module4
    createdb jhu_module4_test
    ```
-4. Create `module_4/.env`:
+2. Create `module_4/.env` (it is git-ignored):
    ```
    DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/jhu_module4
    TEST_DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/jhu_module4_test
@@ -41,22 +65,16 @@ Module 2 data, gzipped from 50.5 MB to 4.0 MB).
    The password is optional for local trust authentication
    (`postgresql://USER@localhost:5432/jhu_module4`). A variable already set
    in the environment takes precedence over `.env`.
-5. Load the bundled dataset (creates the `applicants` table if needed):
+3. Load the bundled dataset (`module_4/data/llm_extend_applicant_data_full.json.gz`,
+   the cleaned Module 2 data, gzipped from 50.5 MB to 4.0 MB). This creates
+   the `applicants` table if needed:
    ```
    cd module_4
    python src/load_data.py
    ```
    To load a different file, pass its path (`.json` or `.json.gz`):
-   `python src/load_data.py path/to/data.json`.
-6. Start the Flask app and open http://127.0.0.1:5000:
-   ```
-   python src/app.py
-   ```
-   On an empty database the page shows "N/A" answers instead of failing.
-7. Run the tests from the repository root:
-   ```
-   pytest -c module_4/pytest.ini module_4/tests
-   ```
+   `python src/load_data.py path/to/data.json`. If PostgreSQL isn't
+   reachable, the loader exits with status 1 and says what to check.
 
 ### Expected results after a fresh load
 
@@ -72,6 +90,17 @@ The development database used for Module 3 shows 60,030 rows and Q1 =
 that database separately (for example by later Pull Data runs). Their per-question footprint matches
 exactly (1 Fall 2026 row, 6 rows with a nationality classification, 4 PhD
 rows). So a fresh load reproduces the dataset, not those later additions.
+
+## Run the Flask app
+
+From `module_4/`:
+
+```
+python src/app.py
+```
+
+Then open http://127.0.0.1:5000/ (the page is also served at `/analysis`).
+On an empty database the page shows "N/A" answers instead of failing.
 
 ### Pull Data and Update Analysis
 
@@ -117,6 +146,44 @@ GET /pull-status
 **Update Analysis.** The page shows the analysis as of the last Update
 Analysis (the time is shown under the buttons). After a pull finishes,
 click Update Analysis to recompute the numbers with the new rows.
+
+## Run the tests
+
+From the **repository root**:
+
+```
+pytest -c module_4/pytest.ini module_4/tests
+```
+
+* The run enforces 100% statement coverage of `module_4/src`
+  (`--cov-fail-under=100` in `pytest.ini`) and prints a per-file report;
+  `module_4/coverage_summary.txt` is a saved copy of that output.
+* Tests use `TEST_DATABASE_URL` only, never the app database.
+* Every test carries at least one marker: `web`, `buttons`, `analysis`, `db`,
+  `integration`. Run one group with, for example,
+  `pytest -c module_4/pytest.ini -m buttons module_4/tests` (a partial run
+  reports a coverage failure; only the full suite reaches 100%). The
+  command CI runs selects every marker, which is the entire suite:
+  ```
+  pytest -c module_4/pytest.ini -m "web or buttons or analysis or db or integration" module_4/tests
+  ```
+* CI: `.github/workflows/tests.yml` runs that command on every push and pull
+  request to `main`, against a PostgreSQL 16 service container.
+
+## Documentation
+
+Published on Read the Docs: **https://jhu-software-concepts-vtalbot1.readthedocs.io**
+
+It covers setup, architecture, the API reference (with the HTTP routes),
+the testing guide, operational notes, troubleshooting and known issues.
+
+The built HTML is also committed at `module_4/docs/build/html/`; open
+`module_4/docs/build/html/index.html` in a browser. To rebuild it, from the
+repository root (warnings are treated as errors):
+
+```
+sphinx-build -W --keep-going -b html module_4/docs/source module_4/docs/build/html
+```
 
 ---
 
