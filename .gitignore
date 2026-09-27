@@ -56,6 +56,12 @@ module_3/limitations_draft.md
 # Sphinx build cache (pickled doctrees); the built HTML itself is committed
 module_4/docs/build/html/.doctrees/
 
+# iCloud Drive conflict copies (e.g. "index 2.html", "search 3.html", ".coverage 2") -- this repo lives under a synced ~/Documents
+* [0-9]
+* [0-9].*
+* [0-9][0-9]
+* [0-9][0-9].*
+
 # Coverage output (pytest-cov)
 .coverage
 htmlcov/
