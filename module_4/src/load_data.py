@@ -134,6 +134,21 @@ def ensure_table(database_url=None):
         conn.close()
 
 
+def existing_urls(urls, database_url=None):
+    """Return the subset of `urls` already present in the applicants table."""
+    if not urls:
+        return set()
+    conn = connect(database_url)
+    try:
+        create_table(conn)
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT url FROM applicants WHERE url = ANY(%s)", (list(urls),))
+                return {row[0] for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+
 def load_rows(records, conn):
     """Create the applicants table if needed and insert `records` (a list of dicts).
 

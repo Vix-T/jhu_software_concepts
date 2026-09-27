@@ -17,8 +17,14 @@ launched keeps running, and a plain variable wouldn't be shared across
 multiple worker processes under a real WSGI server either. Instead, the
 lock is a small JSON file on disk holding the holder's PID and start time.
 
-Acquisition is atomic (os.O_CREAT | os.O_EXCL) to avoid a check-then-create
-race between two near-simultaneous requests. Staleness is detected by
+Every operation that reads or changes the lock runs while holding an
+exclusive fcntl.flock() on a companion guard file (<lock_path>.guard), so
+check-then-create (try_acquire) and check-then-clear (stale cleanup in
+status) are atomic across threads and processes: a reader can never see a
+half-written lock, and a stale-lock cleanup can never delete a lock another
+request just created. Creation also still uses os.O_CREAT | os.O_EXCL, and
+set_owner() swaps in new contents via a uniquely named temporary file and
+os.replace(). The guard file is never deleted. Staleness is detected by
 checking whether the recorded PID is still alive, not by a fixed timeout,
 so a legitimately slow run is never mistaken for a crash. When the PID is a
 child of this process, os.waitpid(WNOHANG) both checks it and reaps it once
@@ -31,8 +37,11 @@ InMemoryBusyState is the test implementation: same interface, no files,
 no PIDs checked.
 """
 
+import fcntl
 import json
 import os
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 
@@ -64,6 +73,17 @@ class FileLockBusyState:
 
     def __init__(self, lock_path):
         self.lock_path = lock_path
+        self.guard_path = f"{lock_path}.guard"
+
+    @contextmanager
+    def _guard(self):
+        """Hold an exclusive flock on the guard file for the duration of the block."""
+        with open(self.guard_path, "a", encoding="utf-8") as guard:
+            fcntl.flock(guard, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(guard, fcntl.LOCK_UN)
 
     def _clear(self):
         try:
@@ -77,6 +97,15 @@ class FileLockBusyState:
         A lock file whose PID is no longer alive (e.g. left behind by a
         crashed Flask process) or that can't be parsed is removed here.
         """
+        # No lock file means nothing is running; answer without creating the
+        # guard file. A lock that does exist is only read under the guard, so
+        # it's never seen half-written.
+        if not os.path.exists(self.lock_path):
+            return {"running": False}
+        with self._guard():
+            return self._status_unguarded()
+
+    def _status_unguarded(self):
         if not os.path.exists(self.lock_path):
             return {"running": False}
 
@@ -102,34 +131,42 @@ class FileLockBusyState:
 
         Returns True if acquired, False if another live holder has it.
         """
-        # Clears a stale lock first, so a crashed holder can't block forever.
-        self.status()
-        try:
-            fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            return False
+        with self._guard():
+            # Clears a stale lock first, so a crashed holder can't block forever.
+            self._status_unguarded()
+            try:
+                fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                return False
 
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"pid": pid if pid is not None else os.getpid(), "started_at": _now_iso()}, f)
-        return True
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"pid": pid if pid is not None else os.getpid(), "started_at": _now_iso()}, f)
+            return True
 
     def set_owner(self, pid):
         """Record `pid` as the holder of the lock this process already holds.
 
         Keeps the original started_at. The new contents are written to a
-        temporary file and swapped in with os.replace(), so a concurrent
-        status() never sees a half-written lock file.
+        uniquely named temporary file and swapped in with os.replace(), so
+        the lock file is never left half-written, even if this process dies
+        mid-write.
         """
-        with open(self.lock_path, "r", encoding="utf-8") as f:
-            info = json.load(f)
-        info["pid"] = pid
-        tmp_path = f"{self.lock_path}.{os.getpid()}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(info, f)
-        os.replace(tmp_path, self.lock_path)
+        with self._guard():
+            with open(self.lock_path, "r", encoding="utf-8") as f:
+                info = json.load(f)
+            info["pid"] = pid
+            fd, tmp_path = tempfile.mkstemp(
+                dir=os.path.dirname(self.lock_path) or ".",
+                prefix=f"{os.path.basename(self.lock_path)}.",
+                suffix=".tmp",
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(info, f)
+            os.replace(tmp_path, self.lock_path)
 
     def release(self):
-        self._clear()
+        with self._guard():
+            self._clear()
 
 
 class InMemoryBusyState:

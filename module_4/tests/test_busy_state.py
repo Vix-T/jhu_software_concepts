@@ -54,9 +54,11 @@ def _read_lock(lock):
 # --- FileLockBusyState ------------------------------------------------------------
 
 
-def test_no_lock_file_is_not_busy(lock):
+def test_no_lock_file_is_not_busy(lock, tmp_path):
     assert lock.status() == {"running": False}
     assert lock.is_busy() is False
+    # A read-only check with no lock creates nothing on disk.
+    assert os.listdir(tmp_path) == []
 
 
 def test_acquire_records_pid_and_start_time(lock):
@@ -149,7 +151,8 @@ def test_set_owner_moves_lock_to_new_pid(lock, tmp_path):
     lock.set_owner(2468)
 
     assert _read_lock(lock) == {"pid": 2468, "started_at": started_at}
-    assert os.listdir(tmp_path) == ["pull.lock"]
+    # No temporary file left behind; the guard file persists by design.
+    assert sorted(os.listdir(tmp_path)) == ["pull.lock", "pull.lock.guard"]
 
 
 def test_release_removes_lock(lock):

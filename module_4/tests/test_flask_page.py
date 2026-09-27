@@ -62,3 +62,11 @@ def test_first_run_without_applicants_table(make_app, db_conn):
     with db_conn, db_conn.cursor() as cur:
         cur.execute("SELECT to_regclass('applicants')")
         assert cur.fetchone()[0] == "applicants"
+
+
+def test_subtitle_describes_cached_analysis(client):
+    soup = BeautifulSoup(client.get("/analysis").data, "html.parser")
+    subtitle = soup.select_one("p.subtitle").get_text(" ", strip=True)
+
+    assert subtitle == "SQL/ORM query results from the applicants table, as of the last Update Analysis."
+    assert "computed live" not in soup.get_text()

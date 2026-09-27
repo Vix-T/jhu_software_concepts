@@ -8,7 +8,7 @@
 <body>
   <header>
     <h1>Grad Café Applicant Data — Analysis</h1>
-    <p class="subtitle">SQL/ORM query results, computed live from the <code>applicants</code> table.</p>
+    <p class="subtitle">SQL/ORM query results from the <code>applicants</code> table, as of the last Update Analysis.</p>
 
     <div class="actions">
       <button type="button" data-testid="pull-data-btn" data-action-url="{{ url_for('pull_data') }}">Pull Data</button>
@@ -20,6 +20,16 @@
 
     {% if refreshed_at %}
     <p class="refreshed-at">Analysis last updated: {{ refreshed_at }}</p>
+    {% endif %}
+
+    {% if last_result %}
+      {% if last_result.ok %}
+    <p class="last-pull last-pull-ok" data-testid="last-pull">Last pull succeeded: {{ last_result.inserted }} new rows (finished {{ last_result.finished_at }})</p>
+      {% else %}
+    <p class="last-pull last-pull-failed" data-testid="last-pull">Last pull failed: {{ last_result.error|without_failure_prefix }} (finished {{ last_result.finished_at }})</p>
+      {% endif %}
+    {% else %}
+    <p class="last-pull" data-testid="last-pull">No pull has run yet.</p>
     {% endif %}
 
     {% if pull_status.running %}

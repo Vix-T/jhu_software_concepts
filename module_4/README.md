@@ -73,14 +73,50 @@ that database separately (for example by later Pull Data runs). Their per-questi
 exactly (1 Fall 2026 row, 6 rows with a nationality classification, 4 PhD
 rows). So a fresh load reproduces the dataset, not those later additions.
 
-### Pull Data precondition
+### Pull Data and Update Analysis
 
-The "Pull Data" button on the Flask page scrapes new entries from Grad Cafe.
+**Precondition.** The "Pull Data" button scrapes new entries from Grad Cafe.
 It requires a Chrome browser already running with remote debugging enabled
 (`--remote-debugging-port=9222`), with Grad Cafe's Cloudflare challenge
 already manually cleared in that session. Pull Data attaches to that
 existing, already-verified session — it does not launch a browser or solve
-the challenge itself.
+the challenge itself. Without it, the pull fails fast and the failure is
+shown on the page (see "Last pull" below).
+
+**Newest entries first.** Every pull starts at the first (newest) results
+page and keeps only entries whose URL is not already in the database. It
+stops at the first page whose entries are all already loaded, once 300 new
+entries have been collected, or at the end of pagination. Pulls never
+resume from where an earlier pull left off, so repeated pulls stay cheap
+and always pick up what's new.
+
+**Crash handling.** If the browser session crashes mid-pull, the scraper
+re-attaches and retries the page that failed, keeping what it already
+collected. After 3 consecutive failed retries it gives up, and the pull is
+recorded as failed instead of retrying forever.
+
+**One pull at a time.** While a pull is running, Pull Data and Update
+Analysis both answer HTTP 409 (`{"busy": true}`), and the page shows a
+"pull in progress" banner.
+
+**Last pull.** Every pull, successful or not, records its outcome in
+`src/_pull_data_result.json` (not committed). The page shows it under the
+buttons: "Last pull succeeded: N new rows (finished …)", "Last pull failed:
+<reason> (finished …)", or "No pull has run yet." The same information is
+available as JSON:
+
+```
+GET /pull-status
+{"last_result": {"ok": true, "inserted": 2, "skipped": 0, "failed": 0,
+                 "error": null, "finished_at": "2026-09-27T17:33:44+00:00"},
+ "running": false}
+```
+
+`last_result` is `null` before the first pull.
+
+**Update Analysis.** The page shows the analysis as of the last Update
+Analysis (the time is shown under the buttons). After a pull finishes,
+click Update Analysis to recompute the numbers with the new rows.
 
 ---
 

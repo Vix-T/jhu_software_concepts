@@ -1,16 +1,20 @@
-"""Pull Data: scrape new Grad Cafe entries and load them into the DB.
+"""Pull Data: fetch the newest Grad Cafe entries and load them into the DB.
 
-Split into two injectable pieces plus a thin CLI:
+Split into injectable pieces plus a thin CLI:
 
-- scrape_new_entries(...) -> list[dict]: the scraper (Selenium attach via
-  scrape.py; its driver_factory seam lets tests substitute a fake driver).
+- scrape_new_entries(...) -> list[dict]: the scraper. Every pull starts at
+  the first (newest) results page and stops at the first page whose entries
+  are all already in the database (scrape.scrape_newest), so a pull fetches
+  what's new rather than resuming deeper into history.
 - run_pull(scraper, loader) -> dict: calls scraper(), hands the records to
   loader(records) -> (inserted, skipped, failed), and returns the counts.
   app.py's in-process Pull Data path calls this directly with injected
   callables.
 - main(): the CLI app.py's default Pull Data route launches as a background
   subprocess (see busy_state.py for the lock that prevents two pulls from
-  running at once).
+  running at once). Every run -- success or failure -- records its outcome
+  in a small JSON result file (write_pull_result) that the app reads to
+  show the last pull's result.
 
 Pull Data deliberately does NOT run the LLM-cleaning step -- newly
 scraped rows are loaded with llm_generated_program/llm_generated_university
@@ -26,24 +30,26 @@ the challenge itself. If that precondition isn't met, it fails fast with
 an explanatory message instead of hanging.
 """
 
+import json
 import os
 import socket
 import sys
+import tempfile
+from datetime import datetime, timezone
 
 from selenium.common.exceptions import WebDriverException
 
 import load_data
-from scrape import scrape_data
+from scrape import scrape_newest
 
 BASE_DIR = os.path.dirname(__file__)
-PULL_STATE_FILE = os.path.join(BASE_DIR, "_pull_data_state.json")
-PULL_CAPTURED_DIR = os.path.join(BASE_DIR, "_pull_data_pages")
+PULL_RESULT_FILE = os.path.join(BASE_DIR, "_pull_data_result.json")
+# The app passes its configured result path to the pull subprocess via this variable.
+RESULT_FILE_ENV = "PULL_RESULT_FILE"
 
-# A bounded, "check for what's new" pull -- not the original historical
-# backfill's target_count=60000. Already-seen entries are silently skipped
-# by load_data.py's ON CONFLICT (url) DO NOTHING, so over-fetching here is
-# harmless; this just keeps a single Pull Data run's lock-held time short
-# and checkable, per the Part 8 design.
+# Upper bound on new entries collected by one pull, so a single Pull Data
+# run's lock-held time stays short even after a long gap between pulls.
+# Normally a pull stops much earlier, at the first page with nothing new.
 TARGET_COUNT = 300
 
 DEBUGGER_HOST = "127.0.0.1"
@@ -84,28 +90,27 @@ def _debugger_port_open(host=DEBUGGER_HOST, port=DEBUGGER_PORT):
 
 def scrape_new_entries(
     target_count=TARGET_COUNT,
-    state_file=PULL_STATE_FILE,
-    captured_dir=PULL_CAPTURED_DIR,
     driver_factory=None,
     port_check=_debugger_port_open,
+    is_known=None,
     **scrape_kwargs,
 ):
-    """Scrape Grad Cafe entries for a Pull Data run and return them as records.
+    """Scrape the newest Grad Cafe entries not yet in the database.
 
     With the default driver_factory (attach to the real Chrome session), the
     debugger port is checked first (port_check, default _debugger_port_open)
     and PullPreconditionError is raised if nothing is listening. A
     caller-supplied driver_factory skips that check, since it doesn't attach
-    to Chrome. Extra keyword arguments (e.g.
-    delay_seconds, start_url) are passed through to scrape.scrape_data().
+    to Chrome. is_known(urls) -> set defaults to a lookup in DATABASE_URL.
+    Extra keyword arguments (e.g. start_url, delay_seconds, max_retries) are
+    passed through to scrape.scrape_newest().
     """
     if driver_factory is None and not port_check():
         raise PullPreconditionError(CLOUDFLARE_PRECONDITION_MESSAGE)
 
-    return scrape_data(
+    return scrape_newest(
+        is_known or load_data.existing_urls,
         target_count=target_count,
-        state_file=state_file,
-        captured_dir=captured_dir,
         driver_factory=driver_factory,
         **scrape_kwargs,
     )
@@ -132,25 +137,79 @@ def run_pull(scraper, loader):
     }
 
 
-def main(scraper=None, loader=None):
-    """CLI entry point. scraper/loader default to scrape_new_entries and
-    load_data.load_into_database (DATABASE_URL)."""
+def default_result_path():
+    """The pull result file: $PULL_RESULT_FILE if set, else src/_pull_data_result.json."""
+    return os.environ.get(RESULT_FILE_ENV) or PULL_RESULT_FILE
+
+
+def pull_result(run=None, error=None):
+    """Build the result record for a finished pull (run on success, error on failure)."""
+    run = run or {}
+    return {
+        "ok": error is None,
+        "inserted": run.get("inserted", 0),
+        "skipped": run.get("skipped", 0),
+        "failed": len(run.get("failed", [])),
+        "error": error,
+        "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def write_pull_result(path, result):
+    """Atomically write `result` as JSON to `path` (temp file + os.replace)."""
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".pull_result.", suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(result, f)
+    os.replace(tmp_path, path)
+
+
+def read_pull_result(path):
+    """Return the last pull's result dict, or None if no (readable) result exists yet."""
     try:
-        result = run_pull(scraper or scrape_new_entries, loader or load_data.load_into_database)
+        with open(path, "r", encoding="utf-8") as f:
+            result = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    return result if isinstance(result, dict) else None
+
+
+def _fail(result_path, error, lines):
+    write_pull_result(result_path, pull_result(error=error))
+    for line in lines:
+        print(line)
+    sys.exit(1)
+
+
+def main(scraper=None, loader=None, result_path=None):
+    """CLI entry point; records the outcome in the result file and exits 1 on failure.
+
+    scraper/loader default to scrape_new_entries and
+    load_data.load_into_database (DATABASE_URL); result_path defaults to
+    default_result_path().
+    """
+    result_path = result_path or default_result_path()
+    try:
+        run = run_pull(scraper or scrape_new_entries, loader or load_data.load_into_database)
     except PullPreconditionError as exc:
-        print(exc)
-        sys.exit(1)
+        _fail(result_path, str(exc), [str(exc)])
     except WebDriverException as exc:
         # The port was open (something is listening), but Selenium still
         # couldn't attach/negotiate a session with it -- a different,
         # rarer failure than the missing-Chrome case above.
-        print(CLOUDFLARE_PRECONDITION_MESSAGE)
-        print(f"Underlying error: {exc}")
-        sys.exit(1)
+        _fail(
+            result_path,
+            f"could not attach to Chrome: {exc}".strip(),
+            [CLOUDFLARE_PRECONDITION_MESSAGE, f"Underlying error: {exc}"],
+        )
+    except Exception as exc:  # retries exhausted, database errors, anything else: record it
+        message = f"{type(exc).__name__}: {exc}"
+        _fail(result_path, message, [f"PULL FAILED: {message}"])
 
+    write_pull_result(result_path, pull_result(run=run))
     print(
-        f"Pull complete: {result['scraped']} entries scraped, {result['inserted']} inserted, "
-        f"{result['skipped']} already present, {len(result['failed'])} failed to parse."
+        f"Pull complete: {run['scraped']} entries scraped, {run['inserted']} inserted, "
+        f"{run['skipped']} already present, {len(run['failed'])} failed to parse."
     )
 
 

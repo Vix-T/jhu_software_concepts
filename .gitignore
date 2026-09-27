@@ -42,6 +42,9 @@ module_2/_test_*.json
 */_pull_data_pages/
 */_pull_data_new_entries.json
 */src/.scrape_lock
+*/src/.scrape_lock.*
+*/src/_pull_data_result.json
+*/src/.pull_result.*.tmp
 */src/_pull_data_state.json
 */src/_pull_data_pages/
 

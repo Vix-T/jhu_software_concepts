@@ -102,6 +102,14 @@ def _empty_applicants(db_conn):
         cur.execute("TRUNCATE applicants RESTART IDENTITY")
 
 
+@pytest.fixture(autouse=True)
+def pull_result_path(tmp_path, monkeypatch):
+    """Per-test pull result file: apps, pull_data.main() and CLI runs never touch src/."""
+    path = tmp_path / "pull_result.json"
+    monkeypatch.setenv("PULL_RESULT_FILE", str(path))
+    return path
+
+
 @pytest.fixture
 def row_count(db_conn):
     def count():
@@ -208,6 +216,20 @@ def load_fixture(name):
         return f.read()
 
 
+PULL_PAGE_URLS = [SURVEY_URL, PAGE_2_URL, "https://www.thegradcafe.com/survey/?page=3"]
+
+
+def result_url(result_id):
+    return f"https://www.thegradcafe.com/result/{result_id}"
+
+
+def pull_pages():
+    """Newest-first fixture pages: page 1 (2 new, 3 known), page 2 (all known), page 3 (never reached)."""
+    return {
+        url: load_fixture(f"pull_page_{n}.html") for n, url in enumerate(PULL_PAGE_URLS, start=1)
+    }
+
+
 def survey_pages():
     return {SURVEY_URL: load_fixture("page_1.html"), PAGE_2_URL: load_fixture("page_2.html")}
 
@@ -297,11 +319,8 @@ def make_app(test_database_url, busy_state, _applicants_table):
     run the real get_analysis(); refresh_fn is real unless a test passes one."""
 
     def build(**overrides):
-        return create_app(
-            config={"DATABASE_URL": test_database_url, "TESTING": True},
-            busy_state=busy_state,
-            **overrides,
-        )
+        overrides.setdefault("busy_state", busy_state)
+        return create_app(config={"DATABASE_URL": test_database_url, "TESTING": True}, **overrides)
 
     return build
 

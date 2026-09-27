@@ -73,6 +73,20 @@ header h1 {
   font-size: 0.85rem;
 }
 
+.last-pull {
+  margin: 0 0 12px 0;
+  color: #55606b;
+  font-size: 0.85rem;
+}
+
+.last-pull-ok {
+  color: #1d6b3a;
+}
+
+.last-pull-failed {
+  color: #9b2c2c;
+}
+
 .status-banner {
   background: #fdf3e3;
   border: 1px solid #e8c47c;

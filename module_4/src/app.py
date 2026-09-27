@@ -21,6 +21,11 @@ dependency is injectable so tests can substitute fakes:
     pull_launcher  () -> process with a .pid; default
                    starts pull_data.py with subprocess.Popen.
 
+Every pull's outcome is recorded in a JSON result file (config
+PULL_RESULT_PATH, default pull_data.default_result_path()): the pull
+subprocess writes it when it finishes, and the in-process path writes it
+itself. The page's last-pull banner and GET /pull-status read it.
+
 The page shows a cached analysis snapshot: it is computed on the first
 page load and recomputed only when Update Analysis runs, so newly pulled
 rows appear once Update Analysis is clicked.
@@ -37,7 +42,7 @@ import load_data
 from busy_state import FileLockBusyState
 from models import make_session_factory
 from orm_queries import get_analysis
-from pull_data import run_pull
+from pull_data import default_result_path, pull_result, read_pull_result, run_pull, write_pull_result
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 PULL_DATA_SCRIPT = os.path.join(SRC_DIR, "pull_data.py")
@@ -58,6 +63,14 @@ def percent(value):
     return f"{value:.2f}%"
 
 
+def without_failure_prefix(message):
+    """Drop a leading "PULL FAILED:" so the banner doesn't read "Last pull failed: PULL FAILED: ..."."""
+    prefix = "PULL FAILED:"
+    if message.startswith(prefix):
+        return message[len(prefix):].lstrip()
+    return message
+
+
 def create_app(
     config=None,
     *,
@@ -71,7 +84,8 @@ def create_app(
     """Build the Flask app. See the module docstring for the injectable dependencies.
 
     config keys: SECRET_KEY (else the SECRET_KEY env var, else random),
-    DATABASE_URL (else config.get_database_url()), BUSY_LOCK_PATH, plus any
+    DATABASE_URL (else config.get_database_url()), BUSY_LOCK_PATH,
+    PULL_RESULT_PATH (else pull_data.default_result_path()), plus any
     standard Flask setting such as TESTING.
     """
     config = dict(config or {})
@@ -82,8 +96,10 @@ def create_app(
     app.config.update(config)
     app.add_template_filter(two_decimals, "two_decimals")
     app.add_template_filter(percent, "percent")
+    app.add_template_filter(without_failure_prefix, "without_failure_prefix")
 
     database_url = app.config.get("DATABASE_URL")
+    result_path = app.config.get("PULL_RESULT_PATH") or default_result_path()
 
     if busy_state is None:
         busy_state = FileLockBusyState(app.config.get("BUSY_LOCK_PATH", LOCK_PATH))
@@ -112,6 +128,7 @@ def create_app(
             env = dict(os.environ)
             if database_url:
                 env["DATABASE_URL"] = database_url
+            env["PULL_RESULT_FILE"] = result_path
             return subprocess.Popen([sys.executable, PULL_DATA_SCRIPT], cwd=SRC_DIR, env=env)
 
     snapshot = {"data": None, "refreshed_at": None}
@@ -131,6 +148,7 @@ def create_app(
         return render_template(
             "analysis.html",
             pull_status=busy_state.status(),
+            last_result=read_pull_result(result_path),
             refreshed_at=snapshot["refreshed_at"],
             **snapshot["data"],
         )
@@ -159,10 +177,17 @@ def create_app(
             result = run_pull(scraper, loader)
         except Exception as exc:  # any scrape/load failure is reported to the client
             app.logger.exception("Pull Data failed")
-            return jsonify(ok=False, error=str(exc) or type(exc).__name__), 500
+            error = str(exc) or type(exc).__name__
+            write_pull_result(result_path, pull_result(error=error))
+            return jsonify(ok=False, error=error), 500
         finally:
             busy_state.release()
+        write_pull_result(result_path, pull_result(run=result))
         return jsonify(ok=True, inserted=result["inserted"]), 200
+
+    @app.route("/pull-status")
+    def pull_status():
+        return jsonify(running=busy_state.is_busy(), last_result=read_pull_result(result_path))
 
     @app.route("/update-analysis", methods=["POST"])
     def update_analysis():

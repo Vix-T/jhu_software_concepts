@@ -73,7 +73,9 @@ def test_in_process_pull_with_default_lock_and_loader(config, lock_path, fake_re
     assert scraper.calls == 1
 
 
-def test_default_launcher_starts_pull_subprocess(config, lock_path, test_database_url, fake_popen, blocked_child):
+def test_default_launcher_starts_pull_subprocess(
+    config, lock_path, test_database_url, fake_popen, blocked_child, pull_result_path
+):
     fake_popen.pid = blocked_child.pid
     client = app_module.create_app(config).test_client()
 
@@ -85,6 +87,7 @@ def test_default_launcher_starts_pull_subprocess(config, lock_path, test_databas
     assert args == [sys.executable, app_module.PULL_DATA_SCRIPT]
     assert kwargs["cwd"] == app_module.SRC_DIR
     assert kwargs["env"]["DATABASE_URL"] == test_database_url
+    assert kwargs["env"]["PULL_RESULT_FILE"] == str(pull_result_path)
     # Ownership moved from the app process to the launched child.
     with open(lock_path, encoding="utf-8") as f:
         assert json.load(f)["pid"] == blocked_child.pid

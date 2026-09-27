@@ -22,6 +22,31 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 DEBUGGER_ADDRESS = "127.0.0.1:9222"
+SURVEY_URL = "https://www.thegradcafe.com/survey/"
+RESULTS_TABLE_SELECTOR = "tbody.tw-divide-y.tw-divide-gray-200.tw-bg-white"
+
+
+class ScrapeRetriesExhausted(RuntimeError):
+    """The browser session kept crashing; the scrape gave up after max_retries retries."""
+
+
+def _retries_exhausted(attempts, exc):
+    return ScrapeRetriesExhausted(
+        f"browser session crashed {attempts} times in a row; giving up. Last error: {exc}"
+    )
+
+
+def _wait_for_results_table(driver, url, wait_timeout):
+    """Wait up to wait_timeout seconds for the results table; carry on if it never appears."""
+    try:
+        WebDriverWait(driver, wait_timeout).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, RESULTS_TABLE_SELECTOR))
+        )
+    except TimeoutException:
+        print(
+            f"Results table never appeared for {url} "
+            "(page may be blank/failed) — continuing anyway"
+        )
 
 
 def attach_to_chrome():
@@ -37,7 +62,7 @@ def attach_to_chrome():
 
 
 def capture_pages(
-    start_url="https://www.thegradcafe.com/survey/",
+    start_url=SURVEY_URL,
     target_pages=None,
     delay_seconds=2.5,
     state_file="_scrape_state.json",
@@ -108,25 +133,9 @@ def capture_pages(
     else:
         driver = (driver_factory or attach_to_chrome)()
 
-        def _wait_for_results_table(url):
-            try:
-                WebDriverWait(driver, wait_timeout).until(
-                    EC.presence_of_element_located(
-                        (
-                            By.CSS_SELECTOR,
-                            "tbody.tw-divide-y.tw-divide-gray-200.tw-bg-white",
-                        )
-                    )
-                )
-            except TimeoutException:
-                print(
-                    f"Results table never appeared for {url} "
-                    "(page may be blank/failed) — continuing anyway"
-                )
-
         current_url = next_url
         driver.get(current_url)
-        _wait_for_results_table(current_url)
+        _wait_for_results_table(driver, current_url, wait_timeout)
 
         while True:
             page_source = driver.page_source
@@ -160,7 +169,7 @@ def capture_pages(
             time.sleep(delay_seconds)
             current_url = next_url
             driver.get(current_url)
-            _wait_for_results_table(current_url)
+            _wait_for_results_table(driver, current_url, wait_timeout)
 
     print(f"Pages captured this run: {pages_captured_this_run}")
     print(f"Stopped because: {stop_reason}")
@@ -189,19 +198,7 @@ def parse_captured_pages(captured_dir="_captured_pages"):
     all_entries = []
     for page_path in page_paths:
         with open(page_path, "r", encoding="utf-8") as f:
-            html = f.read()
-
-        soup = BeautifulSoup(html, "html.parser")
-        tbody = soup.find("tbody", class_="tw-divide-y tw-divide-gray-200 tw-bg-white")
-        tbody_rows = tbody.find_all("tr", recursive=False) if tbody else []
-
-        non_ad_rows = [row for row in tbody_rows if not _is_ad_row(row)]
-
-        grouped_entries = _group_entry_rows(non_ad_rows)
-        parsed_entries = [_parse_entry(entry_rows) for entry_rows in grouped_entries]
-        filtered_entries = _filter_valid_entries(parsed_entries)
-
-        all_entries.extend(filtered_entries)
+            all_entries.extend(parse_page(f.read()))
 
     print(f"Pages read: {len(page_paths)}")
     print(f"Total valid entries parsed: {len(all_entries)}")
@@ -209,9 +206,115 @@ def parse_captured_pages(captured_dir="_captured_pages"):
     return all_entries
 
 
+def parse_page(html):
+    """Parse one survey results page's HTML into filtered applicant entry records."""
+    soup = BeautifulSoup(html, "html.parser")
+    tbody = soup.find("tbody", class_="tw-divide-y tw-divide-gray-200 tw-bg-white")
+    tbody_rows = tbody.find_all("tr", recursive=False) if tbody else []
+
+    non_ad_rows = [row for row in tbody_rows if not _is_ad_row(row)]
+
+    grouped_entries = _group_entry_rows(non_ad_rows)
+    parsed_entries = [_parse_entry(entry_rows) for entry_rows in grouped_entries]
+    return _filter_valid_entries(parsed_entries)
+
+
+def scrape_newest(
+    is_known,
+    start_url=SURVEY_URL,
+    target_count=300,
+    delay_seconds=2.5,
+    driver_factory=None,
+    max_retries=3,
+    crash_retry_wait=5,
+    wait_timeout=15,
+):
+    """
+    Collect entries newer than what the database already has, newest first.
+
+    Used by Pull Data. Every call starts at start_url (the first, newest
+    results page) -- there is no resume state across pulls -- and walks
+    forward through pagination, keeping entries whose URL is_known() does
+    not report. It stops after the first page that yields no new entries
+    (everything older is already loaded), once at least target_count new
+    entries are collected, or when pagination ends. Pages are parsed in
+    memory; nothing is written to disk.
+
+    Within a single call, a browser crash (WebDriverException) re-attaches
+    and retries the page that failed, keeping everything collected so far.
+    After max_retries consecutive failed retries it raises
+    ScrapeRetriesExhausted.
+
+    Args:
+        is_known: Callable taking a list of URLs and returning the set of
+            those already in the database.
+        start_url: The first (newest) results page.
+        target_count: Stop fetching further pages once at least this many
+            new entries have been collected.
+        delay_seconds: Seconds to sleep between page loads.
+        driver_factory: Zero-argument callable returning a WebDriver-like
+            object (default: attach_to_chrome).
+        max_retries: Consecutive crash retries allowed before giving up.
+        crash_retry_wait: Seconds to wait before re-attaching after a crash.
+        wait_timeout: Seconds to wait for each page's results table.
+
+    Returns:
+        list: New entry records (entries without a URL are dropped, since
+            they can't be loaded).
+    """
+    new_entries = []
+    seen_urls = set()
+    url = start_url
+    driver = None
+    crashes = 0
+    pages_read = 0
+
+    while True:
+        try:
+            if driver is None:
+                driver = (driver_factory or attach_to_chrome)()
+            driver.get(url)
+            _wait_for_results_table(driver, url, wait_timeout)
+            html = driver.page_source
+        except WebDriverException as exc:
+            crashes += 1
+            if crashes > max_retries:
+                raise _retries_exhausted(crashes, exc) from exc
+            print(f"Browser session crashed loading {url}: {exc}")
+            print(f"Retrying the same page with a fresh browser attach ({crashes}/{max_retries}).")
+            driver = None
+            time.sleep(crash_retry_wait)
+            continue
+
+        crashes = 0
+        pages_read += 1
+        entries = [e for e in parse_page(html) if e["URL"]]
+        known = is_known([e["URL"] for e in entries])
+        fresh = [e for e in entries if e["URL"] not in known and e["URL"] not in seen_urls]
+        seen_urls.update(e["URL"] for e in fresh)
+        new_entries.extend(fresh)
+
+        next_url = _extract_next_url(BeautifulSoup(html, "html.parser"))
+        if not fresh:
+            stop_reason = "a page had no new entries"
+            break
+        if len(new_entries) >= target_count:
+            stop_reason = f"collected at least {target_count} new entries"
+            break
+        if next_url is None or next_url == url:
+            stop_reason = "reached the end of pagination"
+            break
+
+        time.sleep(delay_seconds)
+        url = next_url
+
+    print(f"Pages read: {pages_read}; new entries: {len(new_entries)}; stopped because {stop_reason}.")
+    return new_entries
+
+
 def scrape_data(
     target_count=60000,
-    start_url="https://www.thegradcafe.com/survey/",
+    start_url=SURVEY_URL,
     delay_seconds=2.5,
     state_file="_scrape_state.json",
     captured_dir="_captured_pages",
@@ -219,6 +322,7 @@ def scrape_data(
     crash_retry_wait=5,
     driver_factory=None,
     wait_timeout=15,
+    max_retries=3,
 ):
     """
     Scrape Grad Cafe survey results end-to-end, until target_count entries
@@ -241,7 +345,9 @@ def scrape_data(
     tries again: the next capture_pages() call re-attaches to Chrome
     (via its own debuggerAddress attach logic) and resumes from
     state_file's last saved position. This makes multi-hour scrapes safe
-    to kick off and leave unattended.
+    to kick off and leave unattended. A batch that keeps crashing is retried
+    at most max_retries times in a row; after that ScrapeRetriesExhausted
+    is raised instead of looping forever.
 
     capture_pages() and parse_captured_pages() are also fully usable on
     their own: e.g. parse_captured_pages() can be re-run by itself,
@@ -265,10 +371,12 @@ def scrape_data(
         driver_factory: Passed through to capture_pages() (default:
             attach_to_chrome).
         wait_timeout: Passed through to capture_pages().
+        max_retries: Consecutive crash retries allowed before giving up.
 
     Returns:
         list: The full flat list of parsed applicant entry records.
     """
+    crashes = 0
     while True:
         if os.path.exists(state_file):
             with open(state_file, "r", encoding="utf-8") as f:
@@ -287,6 +395,9 @@ def scrape_data(
                 wait_timeout=wait_timeout,
             )
         except WebDriverException as exc:
+            crashes += 1
+            if crashes > max_retries:
+                raise _retries_exhausted(crashes, exc) from exc
             print(
                 f"Browser session crashed during batch starting at page "
                 f"{current_pages_captured + 1} (target "
@@ -299,6 +410,7 @@ def scrape_data(
             time.sleep(crash_retry_wait)
             continue
 
+        crashes = 0
         entries = parse_captured_pages(captured_dir=captured_dir)
 
         with open(state_file, "r", encoding="utf-8") as f:
