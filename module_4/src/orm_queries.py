@@ -24,14 +24,12 @@ from sqlalchemy import and_, case, func, or_, select
 import query_data
 from config import get_database_url
 from models import Applicant, make_session_factory
-from query_data import CS_PATTERN, JHU_PATTERN, Q8_Q9_UNIVERSITIES
+from query_data import CS_PATTERN, JHU_PATTERN, NO_DATA, Q8_Q9_UNIVERSITIES
+from query_data import percent_or_none as _percent
 
 
-def _percent(numerator, denominator):
-    """100 * numerator / denominator, or None when there is nothing to divide by."""
-    if not denominator:
-        return None
-    return 100.0 * numerator / denominator
+def _round2(value):
+    return None if value is None else round(value, 2)
 
 
 def orm_q1(session):
@@ -261,9 +259,11 @@ def format_comparison(checks):
         match = orm_value == raw_value
         all_match = all_match and match
         status = "MATCH" if match else "MISMATCH"
+        orm_text = NO_DATA if orm_value is None else fmt.format(orm_value)
+        raw_text = NO_DATA if raw_value is None else fmt.format(raw_value)
         table_lines.append(
             f"{label:<10} {description:<45} "
-            f"ORM={fmt.format(orm_value):<10} raw-SQL={fmt.format(raw_value):<10} [{status}]"
+            f"ORM={orm_text:<10} raw-SQL={raw_text:<10} [{status}]"
         )
 
     if all_match:
@@ -296,11 +296,11 @@ def main():
 
     checks = [
         ("Q1", "Fall 2026 applicant count", q1_count, raw_q1_count, "{}"),
-        ("Q4", "Avg GPA, American, Fall 2026", round(q4_avg, 2), round(raw_q4_avg, 2), "{:.2f}"),
-        ("Q5", "Fall 2025 acceptance %", round(q5_pct, 2), round(raw_q5_pct, 2), "{:.2f}"),
+        ("Q4", "Avg GPA, American, Fall 2026", _round2(q4_avg), _round2(raw_q4_avg), "{:.2f}"),
+        ("Q5", "Fall 2025 acceptance %", _round2(q5_pct), _round2(raw_q5_pct), "{:.2f}"),
         ("Q8", "Fall 2026/Accepted/PhD/CS, original fields", q8_count, raw_q8_count, "{}"),
         ("Q9", "Same as Q8, llm-generated fields", q9_count, raw_q9_count, "{}"),
-        ("Custom Q1", "GRE Quant contamination %", round(custom1_pct, 2), round(raw_custom1_pct, 2), "{:.2f}"),
+        ("Custom Q1", "GRE Quant contamination %", _round2(custom1_pct), _round2(raw_custom1_pct), "{:.2f}"),
     ]
 
     table_lines, verdict_line = format_comparison(checks)

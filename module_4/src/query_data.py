@@ -7,15 +7,15 @@ from config import get_database_url
 # Word-boundary (\y) regex patterns, matched case-insensitively (~*).
 # See conversation history / query_results write-up for the false-positive
 # and false-negative checks that justify each pattern against real data.
-JHU_PATTERN = r"\yJohns? Hopkins\y"  # accepts the "John Hopkins" (missing "s") typo
+JHU_PATTERN = r"\y(Johns? Hopkins|JHU)\y"  # also the "John Hopkins" (missing "s") typo
 CS_PATTERN = r"\y(Computer Sciences?|CS)\y"
 MIT_PATTERN = r"\y(MIT|Massachusetts Institute of Technology)\y"
 STANFORD_PATTERN = r"\yStanford\y"
 CARNEGIE_MELLON_PATTERN = r"\yCarnegie Mellon\y"  # deliberately NOT tolerant of the
                                                    # LLM's "Carnegie Melon" misspelling —
                                                    # Q9 is supposed to expose that gap.
-GEORGETOWN_PATTERN = r"Georgetown University"  # literal (not \yGeorgetown\y) to exclude
-                                                # the unrelated "Georgetown College" (KY)
+GEORGETOWN_PATTERN = r"\yGeorgetown\y(?!\s+College\y)"  # "Georgetown" or "Georgetown University",
+                                                           # but not the unrelated "Georgetown College" (KY)
 
 Q8_Q9_UNIVERSITIES = [
     ("Georgetown", GEORGETOWN_PATTERN),
@@ -23,6 +23,25 @@ Q8_Q9_UNIVERSITIES = [
     ("Stanford", STANFORD_PATTERN),
     ("Carnegie Mellon", CARNEGIE_MELLON_PATTERN),
 ]
+
+
+NO_DATA = "N/A (no data)"
+
+
+def percent_or_none(numerator, denominator):
+    """100 * numerator / denominator, or None when there is nothing to divide by."""
+    if not denominator:
+        return None
+    return 100.0 * numerator / denominator
+
+
+def _num(value, spec):
+    """Format a number for main()'s report, or NO_DATA when there is none."""
+    return NO_DATA if value is None else format(value, spec)
+
+
+def _pct(value):
+    return NO_DATA if value is None else f"{value:.2f}%"
 
 
 def q1(cur):
@@ -43,8 +62,8 @@ def q2(cur):
         """
     )
     numerator, denominator = cur.fetchone()
-    percent = 100.0 * numerator / denominator
-    return numerator, denominator, percent
+    numerator = numerator or 0
+    return numerator, denominator, percent_or_none(numerator, denominator)
 
 
 def q3(cur):
@@ -99,8 +118,8 @@ def q5(cur):
         """
     )
     numerator, denominator = cur.fetchone()
-    percent = 100.0 * numerator / denominator
-    return numerator, denominator, percent
+    numerator = numerator or 0
+    return numerator, denominator, percent_or_none(numerator, denominator)
 
 
 def q6(cur):
@@ -214,8 +233,8 @@ def custom1(cur):
         """
     )
     contaminated, total = cur.fetchone()
-    percent = 100.0 * contaminated / total
-    return contaminated, total, percent
+    contaminated = contaminated or 0
+    return contaminated, total, percent_or_none(contaminated, total)
 
 
 def custom2(cur):
@@ -232,7 +251,10 @@ def custom2(cur):
         ORDER BY total DESC
         """
     )
-    return [(degree, accepted, total, 100.0 * accepted / total) for degree, accepted, total in cur.fetchall()]
+    return [
+        (degree, accepted, total, percent_or_none(accepted, total))
+        for degree, accepted, total in cur.fetchall()
+    ]
 
 
 def main():
@@ -257,17 +279,17 @@ def main():
 
     print(f"Fall 2026 applicant count: {q1_count}")
     print()
-    print(f"Percent international: {q2_pct:.2f}% ({q2_num}/{q2_denom} entries with a usable classification)")
+    print(f"Percent international: {_pct(q2_pct)} ({q2_num}/{q2_denom} entries with a usable classification)")
     print()
     print("Average scores (each computed over entries that provide that metric):")
     for label, (avg, count) in q3_averages.items():
-        print(f"  Average {label}: {avg:.2f} (n={count})")
+        print(f"  Average {label}: {_num(avg, '.2f')} (n={count})")
     print()
-    print(f"Average GPA, American applicants, Fall 2026: {q4_avg:.2f} (n={q4_n})")
+    print(f"Average GPA, American applicants, Fall 2026: {_num(q4_avg, '.2f')} (n={q4_n})")
     print()
-    print(f"Fall 2025 acceptance percentage: {q5_pct:.2f}% ({q5_num}/{q5_denom} entries)")
+    print(f"Fall 2025 acceptance percentage: {_pct(q5_pct)} ({q5_num}/{q5_denom} entries)")
     print()
-    print(f"Average GPA, accepted applicants, Fall 2026: {q6_avg:.2f} (n={q6_n})")
+    print(f"Average GPA, accepted applicants, Fall 2026: {_num(q6_avg, '.2f')} (n={q6_n})")
     print()
     print(f"Q7 (JHU, Masters, Computer Science, all-time): {q7_count}")
     print()
@@ -280,13 +302,15 @@ def main():
         print(f"  {name:<16} original={orig_count:<4} llm={llm_count:<4} diff={orig_count - llm_count}")
     print()
     print(
-        f"Custom Q1 (GRE Quant contamination rate): {custom1_pct:.2f}% "
+        f"Custom Q1 (GRE Quant contamination rate): {_pct(custom1_pct)} "
         f"({custom1_contaminated}/{custom1_total} entries outside the plausible 130-170 range)"
     )
     print()
     print("Custom Q2 (acceptance rate by degree type):")
     for degree, accepted, total, pct in custom2_rows:
         print(f"  {degree:<10} {pct:.2f}% ({accepted}/{total})")
+    if not custom2_rows:
+        print(f"  {NO_DATA}")
 
 
 if __name__ == "__main__":

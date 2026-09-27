@@ -96,7 +96,9 @@ def db_conn(test_database_url, _applicants_table):
 
 @pytest.fixture(autouse=True)
 def _empty_applicants(db_conn):
+    # Recreate first in case an earlier test dropped the table on purpose.
     with db_conn, db_conn.cursor() as cur:
+        cur.execute(load_data.CREATE_TABLE_SQL)
         cur.execute("TRUNCATE applicants RESTART IDENTITY")
 
 

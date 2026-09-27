@@ -2,6 +2,8 @@
 
 import os
 import runpy
+import subprocess
+import sys
 
 import pytest
 from conftest import make_record
@@ -139,3 +141,41 @@ def test_format_comparison_reports_mismatch():
     assert table[1].endswith("[MISMATCH]")
     assert "ORM=3" in table[1] and "raw-SQL=2" in table[1]
     assert verdict.startswith("MISMATCH DETECTED")
+
+
+def test_query_data_main_on_empty_table(capsys):
+    runpy.run_path(os.path.join(SRC_DIR, "query_data.py"), run_name="__main__")
+
+    out = capsys.readouterr().out
+    assert "Fall 2026 applicant count: 0\n" in out
+    assert "Percent international: N/A (no data) (0/0 entries with a usable classification)\n" in out
+    assert "  Average GPA: N/A (no data) (n=0)\n" in out
+    assert "Average GPA, American applicants, Fall 2026: N/A (no data) (n=0)\n" in out
+    assert "Fall 2025 acceptance percentage: N/A (no data) (0/0 entries)\n" in out
+    assert "Custom Q1 (GRE Quant contamination rate): N/A (no data) (0/0 entries" in out
+    assert out.endswith("Custom Q2 (acceptance rate by degree type):\n  N/A (no data)\n")
+
+
+def test_orm_queries_main_on_empty_table(capsys):
+    runpy.run_path(os.path.join(SRC_DIR, "orm_queries.py"), run_name="__main__")
+
+    out = capsys.readouterr().out
+    assert "ORM=0          raw-SQL=0          [MATCH]" in out
+    assert "Avg GPA, American, Fall 2026                  ORM=N/A (no data) raw-SQL=N/A (no data) [MATCH]" in out
+    assert "Q5 0/0 (raw-SQL 0/0)\n" in out
+    assert out.endswith("All ORM results match the raw-SQL results from query_data.py.\n")
+
+
+@pytest.mark.parametrize("script", ["query_data.py", "orm_queries.py"])
+def test_cli_exits_cleanly_on_empty_table(script, test_database_url):
+    result = subprocess.run(
+        [sys.executable, os.path.join(SRC_DIR, script)],
+        env={**os.environ, "DATABASE_URL": test_database_url},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert "Traceback" not in result.stdout
+    assert "N/A (no data)" in result.stdout

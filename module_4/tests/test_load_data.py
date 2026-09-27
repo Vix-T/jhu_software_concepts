@@ -5,9 +5,11 @@ TEST_DATABASE_URL for the whole run, which is what load_data.main()
 connects to.
 """
 
+import gzip
 import json
 import os
 import runpy
+import socket
 import sys
 from datetime import date
 
@@ -107,4 +109,58 @@ def test_cli_loads_file_named_on_command_line(tmp_path, monkeypatch, capsys, fet
         "  Failed to parse:    1\n"
         "  Failure details (first 10):\n"
         "    record[1]: missing URL (required as natural key)\n"
+    )
+
+
+def test_load_records_reads_gzip(tmp_path):
+    records = [make_record(0), make_record(1)]
+    path = tmp_path / "records.json.gz"
+    with gzip.open(path, "wt", encoding="utf-8") as f:
+        json.dump(records, f)
+
+    assert load_data.load_records(str(path)) == records
+
+
+def test_bundled_dataset_is_the_default():
+    module_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    assert load_data.DATA_FILE == os.path.join(module_dir, "data", "llm_extend_applicant_data_full.json.gz")
+
+    records = load_data.load_records(load_data.DATA_FILE)
+    assert len(records) == 60025
+    urls = [r.get("URL") for r in records]
+    assert sum(1 for u in urls if not u) == 1
+    assert len({u for u in urls if u}) == 60024
+    assert {"URL", "University", "Program Name", "Semester and Year", "llm-generated-university"} <= set(records[0])
+
+
+def test_main_exits_when_database_unreachable(tmp_path, monkeypatch, capsys, row_count):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+    monkeypatch.setenv("DATABASE_URL", f"postgresql://127.0.0.1:{closed_port}/unreachable_test")
+    path = _write(tmp_path, [make_record(0)])
+
+    with pytest.raises(SystemExit) as excinfo:
+        load_data.main(data_file=path)
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert out.startswith(load_data.DB_FAILURE_MESSAGE)
+    assert "DATABASE_URL" in out
+    assert "Underlying error: " in out
+    assert str(closed_port) in out
+    monkeypatch.undo()
+    assert row_count() == 0
+
+
+def test_main_exits_when_data_file_missing(tmp_path, capsys):
+    missing = str(tmp_path / "nope.json.gz")
+
+    with pytest.raises(SystemExit) as excinfo:
+        load_data.main(data_file=missing)
+
+    assert excinfo.value.code == 1
+    assert capsys.readouterr().out == (
+        f"LOAD FAILED: data file not found: {missing}\n"
+        "Pass the path to a JSON (or .json.gz) data file as the first argument.\n"
     )

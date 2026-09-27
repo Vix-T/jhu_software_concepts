@@ -43,3 +43,22 @@ def test_root_renders_same_page(client):
     analysis_soup = BeautifulSoup(analysis.data, "html.parser")
     assert root_soup.find("main") == analysis_soup.find("main")
     assert root_soup.find("div", class_="actions") == analysis_soup.find("div", class_="actions")
+
+
+def test_first_run_without_applicants_table(make_app, db_conn):
+    with db_conn, db_conn.cursor() as cur:
+        cur.execute("DROP TABLE applicants")
+        cur.execute("SELECT to_regclass('applicants')")
+        assert cur.fetchone()[0] is None
+
+    response = make_app().test_client().get("/analysis")
+
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.data, "html.parser")
+    text = soup.get_text(" ", strip=True)
+    assert "Fall 2026 applicant count: 0" in text
+    assert "Percent international: N/A" in text
+    assert text.count("Answer:") == len(soup.select("section.question"))
+    with db_conn, db_conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('applicants')")
+        assert cur.fetchone()[0] == "applicants"

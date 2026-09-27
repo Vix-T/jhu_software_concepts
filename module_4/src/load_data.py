@@ -1,5 +1,6 @@
-"""Load cleaned Grad Cafe applicant data from JSON into PostgreSQL."""
+"""Load cleaned Grad Cafe applicant data from JSON (optionally gzipped) into PostgreSQL."""
 
+import gzip
 import json
 import os
 import sys
@@ -9,7 +10,18 @@ import psycopg2
 
 from config import get_database_url
 
-DATA_FILE = os.path.join(os.path.dirname(__file__), "llm_extend_applicant_data_full.json")
+# The cleaned Module 2 dataset, bundled with the repo (gzipped: 50.5 MB -> 4.0 MB).
+DATA_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data",
+    "llm_extend_applicant_data_full.json.gz",
+)
+
+DB_FAILURE_MESSAGE = (
+    "LOAD FAILED: could not connect to PostgreSQL or write to the applicants table.\n"
+    "Check that DATABASE_URL is set (environment or module_4/.env) and points at a "
+    "running PostgreSQL server and an existing database you can write to."
+)
 
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS applicants (
@@ -95,13 +107,31 @@ def record_to_row(record):
 
 
 def load_records(path):
-    with open(path, "r", encoding="utf-8") as f:
+    """Read a JSON list of records from `path`; a path ending in .gz is gunzipped."""
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8") as f:
         return json.load(f)
 
 
 def connect(database_url=None):
     """Open a psycopg2 connection to database_url (default: DATABASE_URL)."""
     return psycopg2.connect(database_url or get_database_url())
+
+
+def create_table(conn):
+    """Create the applicants table on `conn` if it doesn't exist yet (commits)."""
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(CREATE_TABLE_SQL)
+
+
+def ensure_table(database_url=None):
+    """Create the applicants table in database_url (default: DATABASE_URL) if needed."""
+    conn = connect(database_url)
+    try:
+        create_table(conn)
+    finally:
+        conn.close()
 
 
 def load_rows(records, conn):
@@ -123,9 +153,7 @@ def load_rows(records, conn):
     skipped_duplicates = 0
     failed = []
 
-    with conn:
-        with conn.cursor() as cur:
-            cur.execute(CREATE_TABLE_SQL)
+    create_table(conn)
 
     with conn:
         with conn.cursor() as cur:
@@ -167,7 +195,24 @@ def load_into_database(records, database_url=None):
 
 
 def main(data_file=DATA_FILE):
-    inserted, skipped_duplicates, failed = load_into_database(load_records(data_file))
+    """Load `data_file` into DATABASE_URL and print a summary.
+
+    Exits with status 1 and an actionable message if the data file is missing
+    or the database can't be reached or written to.
+    """
+    try:
+        records = load_records(data_file)
+    except FileNotFoundError:
+        print(f"LOAD FAILED: data file not found: {data_file}")
+        print("Pass the path to a JSON (or .json.gz) data file as the first argument.")
+        sys.exit(1)
+
+    try:
+        inserted, skipped_duplicates, failed = load_into_database(records)
+    except psycopg2.Error as exc:
+        print(DB_FAILURE_MESSAGE)
+        print(f"Underlying error: {str(exc).strip().splitlines()[0]}")
+        sys.exit(1)
 
     print("Load summary:")
     print(f"  Inserted:           {inserted}")

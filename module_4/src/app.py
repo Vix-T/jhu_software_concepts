@@ -90,8 +90,14 @@ def create_app(
 
     if analysis_fn is None:
         session_factory = make_session_factory(database_url)
+        table_checked = []
 
         def analysis_fn():
+            # First run against a fresh database: create the (empty) applicants
+            # table so the page renders "N/A" answers instead of failing.
+            if not table_checked:
+                load_data.ensure_table(database_url)
+                table_checked.append(True)
             with session_factory() as session:
                 return get_analysis(session)
 

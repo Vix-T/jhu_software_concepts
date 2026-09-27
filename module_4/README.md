@@ -11,22 +11,67 @@ results on a Flask webpage (`app.py`) with "Pull Data" (scrape new entries)
 and "Update Analysis" (re-run the analysis queries against the current
 database) functionality.
 
-## Setup / Run
+## Setup / Run (fresh clone)
 
-1. Create a `.env` file in `module_4/` defining `DATABASE_URL`:
+These steps reproduce the populated database from the dataset bundled in
+the repo (`module_4/data/llm_extend_applicant_data_full.json.gz`, the cleaned
+Module 2 data, gzipped from 50.5 MB to 4.0 MB).
+
+1. Clone the repository and change into it:
    ```
-   DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DBNAME
+   git clone https://github.com/Vix-T/jhu_software_concepts.git
+   cd jhu_software_concepts
+   ```
+2. Install dependencies (Python 3.12):
+   ```
+   python -m pip install -r module_4/requirements.txt
+   ```
+3. Create two PostgreSQL databases: one for the app and one for the tests.
+   The test database's name must end in `_test`; the test suite refuses to
+   run against anything else.
+   ```
+   createdb jhu_module4
+   createdb jhu_module4_test
+   ```
+4. Create `module_4/.env`:
+   ```
+   DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/jhu_module4
+   TEST_DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/jhu_module4_test
    ```
    The password is optional for local trust authentication
-   (`postgresql://USER@localhost:5432/DBNAME`). A `DATABASE_URL` already set
+   (`postgresql://USER@localhost:5432/jhu_module4`). A variable already set
    in the environment takes precedence over `.env`.
-2. Install dependencies: `pip install -r requirements.txt`
-3. Populate the database once: `python src/load_data.py`
-4. Start the Flask app: `python src/app.py`
-5. Run the tests from the repository root:
+5. Load the bundled dataset (creates the `applicants` table if needed):
+   ```
+   cd module_4
+   python src/load_data.py
+   ```
+   To load a different file, pass its path (`.json` or `.json.gz`):
+   `python src/load_data.py path/to/data.json`.
+6. Start the Flask app and open http://127.0.0.1:5000:
+   ```
+   python src/app.py
+   ```
+   On an empty database the page shows "N/A" answers instead of failing.
+7. Run the tests from the repository root:
    ```
    pytest -c module_4/pytest.ini module_4/tests
    ```
+
+### Expected results after a fresh load
+
+`load_data.py` should report `Inserted: 60024`, `Skipped duplicates: 0`,
+`Failed to parse: 1`. The bundled file holds 60,025 records: 60,024 have a
+unique URL and are inserted, and one has no URL (0-based record index 13125) and is
+skipped, because the URL is the table's natural key. There are no duplicate
+URLs in the file. The page then shows Fall 2026 applicant count (Q1)
+= **32,344**, Q7 = 20, Q8 = 30, Q9 = 26.
+
+The development database used for Module 3 shows 60,030 rows and Q1 =
+32,345. Those 6 extra rows are not in the bundled file: they were added to
+that database separately (for example by later Pull Data runs). Their per-question footprint matches
+exactly (1 Fall 2026 row, 6 rows with a nationality classification, 4 PhD
+rows). So a fresh load reproduces the dataset, not those later additions.
 
 ### Pull Data precondition
 
