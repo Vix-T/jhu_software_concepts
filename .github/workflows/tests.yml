@@ -1,0 +1,54 @@
+name: Module 4 tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # The name must end in "_test": module_4/tests/conftest.py refuses any other database.
+          POSTGRES_DB: jhu_module4_test
+          POSTGRES_USER: postgres
+          # Trust auth inside the throwaway service container, so no password exists anywhere.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        # Job steps wait until the container reports healthy.
+        options: >-
+          --health-cmd "pg_isready -U postgres -d jhu_module4_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: module_4/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r module_4/requirements.txt
+
+      # Runs the marker-filtered suite: every test carries one of these markers,
+      # so this executes the entire suite (and must meet --cov-fail-under=100).
+      - name: Run tests
+        env:
+          TEST_DATABASE_URL: postgresql://postgres@localhost:5432/jhu_module4_test
+        run: pytest -c module_4/pytest.ini -m "web or buttons or analysis or db or integration" module_4/tests

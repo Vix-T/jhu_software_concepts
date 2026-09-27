@@ -1,5 +1,6 @@
 """pull_data.py: the port pre-flight, scrape_new_entries, run_pull, result files, and the CLI."""
 
+import errno
 import json
 import os
 import runpy
@@ -164,7 +165,7 @@ def test_cli_entry_point_fails_fast_without_chrome(monkeypatch, capsys, pull_res
 
     def refuse(self, address):
         attempts.append(address)
-        raise ConnectionRefusedError(61, "Connection refused")
+        raise ConnectionRefusedError(errno.ECONNREFUSED, "Connection refused")
 
     monkeypatch.setattr(socket.socket, "connect", refuse)
 
