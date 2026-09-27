@@ -238,7 +238,11 @@ def custom1(cur):
 
 
 def custom2(cur):
-    """Acceptance rate by degree type (PhD vs. Masters, plus all other degree values)."""
+    """Acceptance rate by degree type (PhD vs. Masters, plus all other degree values).
+
+    Ordered by entry count, largest first; degree types tied on count are
+    ordered alphabetically, so the order is deterministic.
+    """
     cur.execute(
         """
         SELECT
@@ -248,7 +252,7 @@ def custom2(cur):
         FROM applicants
         WHERE degree IS NOT NULL
         GROUP BY degree
-        ORDER BY total DESC
+        ORDER BY total DESC, degree
         """
     )
     return [

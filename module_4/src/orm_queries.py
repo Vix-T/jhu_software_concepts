@@ -163,13 +163,13 @@ def q7_jhu_masters_cs(session):
 
 
 def custom2_acceptance_by_degree(session):
-    """Acceptance rate by degree type (PhD vs. Masters, plus all other degree values)."""
+    """Acceptance rate by degree type; ties on count are ordered alphabetically by degree."""
     accepted = func.sum(case((Applicant.status.ilike("Accepted"), 1), else_=0))
     stmt = (
         select(Applicant.degree, accepted, func.count())
         .where(Applicant.degree.isnot(None))
         .group_by(Applicant.degree)
-        .order_by(func.count().desc())
+        .order_by(func.count().desc(), Applicant.degree)
     )
     rows = session.execute(stmt).all()
     return [(degree, accepted_n, total, _percent(accepted_n, total)) for degree, accepted_n, total in rows]

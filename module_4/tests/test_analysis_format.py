@@ -6,6 +6,10 @@ import pytest
 from bs4 import BeautifulSoup
 from conftest import make_record
 
+import orm_queries
+import query_data
+from models import make_session_factory
+
 pytestmark = pytest.mark.analysis
 
 LOOSE_PERCENT = re.compile(r"\d+(?:\.\d+)?%")
@@ -62,3 +66,23 @@ def test_empty_database_shows_na(client):
     assert "N/A" in text
     for value in LOOSE_PERCENT.findall(text):
         assert STRICT_PERCENT.fullmatch(value), value
+
+
+def test_custom2_ties_ordered_by_degree(client, seed, db_conn, test_database_url):
+    # Three degree types tied at 2 entries each, inserted in reverse alphabetical
+    # order; ties must come back alphabetically by degree, everywhere.
+    rows = []
+    for degree in ("PhD", "Masters", "EdD"):
+        rows += [make_record(len(rows), **{"Masters or PhD": degree, "Applicant Status": "Accepted"}),
+                 make_record(len(rows) + 1, **{"Masters or PhD": degree, "Applicant Status": "Rejected"})]
+    rows.append(make_record(len(rows), **{"Masters or PhD": "MFA"}))  # count 1, sorts last
+    seed(rows)
+    expected = [("EdD", 1, 2), ("Masters", 1, 2), ("PhD", 1, 2), ("MFA", 1, 1)]
+
+    with db_conn, db_conn.cursor() as cur:
+        assert [(d, a, t) for d, a, t, _ in query_data.custom2(cur)] == expected
+    with make_session_factory(test_database_url)() as session:
+        assert [(d, a, t) for d, a, t, _ in orm_queries.custom2_acceptance_by_degree(session)] == expected
+
+    table = BeautifulSoup(_page(client), "html.parser").select("section.question table tbody tr")
+    assert [tr.find("td").get_text() for tr in table] == ["EdD", "Masters", "PhD", "MFA"]
