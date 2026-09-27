@@ -1,0 +1,331 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>app &mdash; Grad Café Applicant Analysis — Module 4</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            Grad Café Applicant Analysis (Module 4)
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../overview.html">Overview &amp; setup</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html">API reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../clean.html">Module 2 cleaning step (upstream)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../testing.html">Testing guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../operations.html">Operational notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../troubleshooting.html">Troubleshooting</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../known_issues.html">Known issues and limitations</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">Grad Café Applicant Analysis (Module 4)</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Module code</a></li>
+      <li class="breadcrumb-item active">app</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for app</h1><div class="highlight"><pre>
+<span></span><span class="sd">"""Flask app displaying the Module 3 applicant-data analysis (Q1-9 + 2 custom questions).</span>
+
+<span class="sd">All database reads go through the SQLAlchemy Applicant model (models.py);</span>
+<span class="sd">every question on the page is computed by orm_queries.get_analysis(), with</span>
+<span class="sd">no raw SQL / text() anywhere in this file.</span>
+
+<span class="sd">create_app() builds the app; there is no module-level app. Every external</span>
+<span class="sd">dependency is injectable so tests can substitute fakes:</span>
+
+<span class="sd">    scraper        () -&gt; list[dict]; when given, Pull Data runs in-process</span>
+<span class="sd">                   (run_pull) and answers 200. When None, Pull Data launches</span>
+<span class="sd">                   pull_data.py as a background subprocess and answers 202.</span>
+<span class="sd">    loader         (records) -&gt; (inserted, skipped, failed); default loads</span>
+<span class="sd">                   into DATABASE_URL via load_data.load_into_database().</span>
+<span class="sd">    analysis_fn    () -&gt; dict of analysis results; default runs</span>
+<span class="sd">                   get_analysis() against DATABASE_URL.</span>
+<span class="sd">    refresh_fn     () -&gt; None; what Update Analysis runs. Default recomputes</span>
+<span class="sd">                   the analysis snapshot the page displays.</span>
+<span class="sd">    busy_state     try_acquire/set_owner/release/is_busy/status (busy_state.py);</span>
+<span class="sd">                   default FileLockBusyState on src/.scrape_lock.</span>
+<span class="sd">    pull_launcher  () -&gt; process with a .pid; default</span>
+<span class="sd">                   starts pull_data.py with subprocess.Popen.</span>
+
+<span class="sd">Every pull's outcome is recorded in a JSON result file (config</span>
+<span class="sd">PULL_RESULT_PATH, default pull_data.default_result_path()): the pull</span>
+<span class="sd">subprocess writes it when it finishes, and the in-process path writes it</span>
+<span class="sd">itself. The page's last-pull banner and GET /pull-status read it.</span>
+
+<span class="sd">The page shows a cached analysis snapshot: it is computed on the first</span>
+<span class="sd">page load and recomputed only when Update Analysis runs, so newly pulled</span>
+<span class="sd">rows appear once Update Analysis is clicked.</span>
+<span class="sd">"""</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">subprocess</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span><span class="p">,</span> <span class="n">timezone</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">flask</span><span class="w"> </span><span class="kn">import</span> <span class="n">Flask</span><span class="p">,</span> <span class="n">jsonify</span><span class="p">,</span> <span class="n">render_template</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">load_data</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">busy_state</span><span class="w"> </span><span class="kn">import</span> <span class="n">FileLockBusyState</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">models</span><span class="w"> </span><span class="kn">import</span> <span class="n">make_session_factory</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">orm_queries</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_analysis</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pull_data</span><span class="w"> </span><span class="kn">import</span> <span class="n">default_result_path</span><span class="p">,</span> <span class="n">pull_result</span><span class="p">,</span> <span class="n">read_pull_result</span><span class="p">,</span> <span class="n">run_pull</span><span class="p">,</span> <span class="n">write_pull_result</span>
+
+<span class="n">SRC_DIR</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">))</span>
+<span class="n">PULL_DATA_SCRIPT</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">SRC_DIR</span><span class="p">,</span> <span class="s2">"pull_data.py"</span><span class="p">)</span>
+<span class="n">LOCK_PATH</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">SRC_DIR</span><span class="p">,</span> <span class="s2">".scrape_lock"</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="two_decimals">
+<a class="viewcode-back" href="../api.html#app.two_decimals">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">two_decimals</span><span class="p">(</span><span class="n">value</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Format a number with exactly 2 decimals, or "N/A" when there is no value."""</span>
+    <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">"N/A"</span>
+    <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">value</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">"</span></div>
+
+
+
+<div class="viewcode-block" id="percent">
+<a class="viewcode-back" href="../api.html#app.percent">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">percent</span><span class="p">(</span><span class="n">value</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Format a percentage with exactly 2 decimals and a % sign, or "N/A" when there is no value."""</span>
+    <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">"N/A"</span>
+    <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">value</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">%"</span></div>
+
+
+
+<div class="viewcode-block" id="without_failure_prefix">
+<a class="viewcode-back" href="../api.html#app.without_failure_prefix">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">without_failure_prefix</span><span class="p">(</span><span class="n">message</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Drop a leading "PULL FAILED:" so the banner doesn't read "Last pull failed: PULL FAILED: ..."."""</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s2">"PULL FAILED:"</span>
+    <span class="k">if</span> <span class="n">message</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="n">prefix</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">message</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="n">prefix</span><span class="p">):]</span><span class="o">.</span><span class="n">lstrip</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">message</span></div>
+
+
+
+<div class="viewcode-block" id="create_app">
+<a class="viewcode-back" href="../api.html#app.create_app">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">create_app</span><span class="p">(</span>
+    <span class="n">config</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">scraper</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="n">loader</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="n">analysis_fn</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="n">refresh_fn</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="n">busy_state</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="n">pull_launcher</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Build the Flask app. See the module docstring for the injectable dependencies.</span>
+
+<span class="sd">    config keys: SECRET_KEY (else the SECRET_KEY env var, else random),</span>
+<span class="sd">    DATABASE_URL (else config.get_database_url()), BUSY_LOCK_PATH,</span>
+<span class="sd">    PULL_RESULT_PATH (else pull_data.default_result_path()), plus any</span>
+<span class="sd">    standard Flask setting such as TESTING.</span>
+<span class="sd">    """</span>
+    <span class="n">config</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">config</span> <span class="ow">or</span> <span class="p">{})</span>
+    <span class="n">app</span> <span class="o">=</span> <span class="n">Flask</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="n">app</span><span class="o">.</span><span class="n">config</span><span class="p">[</span><span class="s2">"SECRET_KEY"</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">"SECRET_KEY"</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">or</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"SECRET_KEY"</span><span class="p">)</span> <span class="ow">or</span> <span class="n">os</span><span class="o">.</span><span class="n">urandom</span><span class="p">(</span><span class="mi">24</span><span class="p">)</span>
+    <span class="p">)</span>
+    <span class="n">app</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
+    <span class="n">app</span><span class="o">.</span><span class="n">add_template_filter</span><span class="p">(</span><span class="n">two_decimals</span><span class="p">,</span> <span class="s2">"two_decimals"</span><span class="p">)</span>
+    <span class="n">app</span><span class="o">.</span><span class="n">add_template_filter</span><span class="p">(</span><span class="n">percent</span><span class="p">,</span> <span class="s2">"percent"</span><span class="p">)</span>
+    <span class="n">app</span><span class="o">.</span><span class="n">add_template_filter</span><span class="p">(</span><span class="n">without_failure_prefix</span><span class="p">,</span> <span class="s2">"without_failure_prefix"</span><span class="p">)</span>
+
+    <span class="n">database_url</span> <span class="o">=</span> <span class="n">app</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"DATABASE_URL"</span><span class="p">)</span>
+    <span class="n">result_path</span> <span class="o">=</span> <span class="n">app</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"PULL_RESULT_PATH"</span><span class="p">)</span> <span class="ow">or</span> <span class="n">default_result_path</span><span class="p">()</span>
+
+    <span class="k">if</span> <span class="n">busy_state</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">busy_state</span> <span class="o">=</span> <span class="n">FileLockBusyState</span><span class="p">(</span><span class="n">app</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"BUSY_LOCK_PATH"</span><span class="p">,</span> <span class="n">LOCK_PATH</span><span class="p">))</span>
+
+    <span class="k">if</span> <span class="n">analysis_fn</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">session_factory</span> <span class="o">=</span> <span class="n">make_session_factory</span><span class="p">(</span><span class="n">database_url</span><span class="p">)</span>
+        <span class="n">table_checked</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">analysis_fn</span><span class="p">():</span>
+<span class="w">            </span><span class="sd">"""Default analysis: get_analysis() on DATABASE_URL, creating the table on first use."""</span>
+            <span class="c1"># First run against a fresh database: create the (empty) applicants</span>
+            <span class="c1"># table so the page renders "N/A" answers instead of failing.</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">table_checked</span><span class="p">:</span>
+                <span class="n">load_data</span><span class="o">.</span><span class="n">ensure_table</span><span class="p">(</span><span class="n">database_url</span><span class="p">)</span>
+                <span class="n">table_checked</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+            <span class="k">with</span> <span class="n">session_factory</span><span class="p">()</span> <span class="k">as</span> <span class="n">session</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">get_analysis</span><span class="p">(</span><span class="n">session</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">loader</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">loader</span><span class="p">(</span><span class="n">records</span><span class="p">):</span>
+<span class="w">            </span><span class="sd">"""Default loader: insert records into DATABASE_URL via load_data."""</span>
+            <span class="k">return</span> <span class="n">load_data</span><span class="o">.</span><span class="n">load_into_database</span><span class="p">(</span><span class="n">records</span><span class="p">,</span> <span class="n">database_url</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">pull_launcher</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">pull_launcher</span><span class="p">():</span>
+<span class="w">            </span><span class="sd">"""Default launcher: start pull_data.py as a background subprocess."""</span>
+            <span class="n">env</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">database_url</span><span class="p">:</span>
+                <span class="n">env</span><span class="p">[</span><span class="s2">"DATABASE_URL"</span><span class="p">]</span> <span class="o">=</span> <span class="n">database_url</span>
+            <span class="n">env</span><span class="p">[</span><span class="s2">"PULL_RESULT_FILE"</span><span class="p">]</span> <span class="o">=</span> <span class="n">result_path</span>
+            <span class="k">return</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">([</span><span class="n">sys</span><span class="o">.</span><span class="n">executable</span><span class="p">,</span> <span class="n">PULL_DATA_SCRIPT</span><span class="p">],</span> <span class="n">cwd</span><span class="o">=</span><span class="n">SRC_DIR</span><span class="p">,</span> <span class="n">env</span><span class="o">=</span><span class="n">env</span><span class="p">)</span>
+
+    <span class="n">snapshot</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"data"</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">"refreshed_at"</span><span class="p">:</span> <span class="kc">None</span><span class="p">}</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">refresh_analysis</span><span class="p">():</span>
+<span class="w">        </span><span class="sd">"""Recompute the analysis and store it, with a timestamp, as the page's snapshot."""</span>
+        <span class="n">snapshot</span><span class="p">[</span><span class="s2">"data"</span><span class="p">]</span> <span class="o">=</span> <span class="n">analysis_fn</span><span class="p">()</span>
+        <span class="n">snapshot</span><span class="p">[</span><span class="s2">"refreshed_at"</span><span class="p">]</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">"%Y-%m-</span><span class="si">%d</span><span class="s2"> %H:%M:%S UTC"</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">refresh_fn</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">refresh_fn</span> <span class="o">=</span> <span class="n">refresh_analysis</span>
+
+    <span class="nd">@app</span><span class="o">.</span><span class="n">route</span><span class="p">(</span><span class="s2">"/"</span><span class="p">)</span>
+    <span class="nd">@app</span><span class="o">.</span><span class="n">route</span><span class="p">(</span><span class="s2">"/analysis"</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">analysis</span><span class="p">():</span>
+<span class="w">        </span><span class="sd">"""GET / and /analysis: render the analysis page from the current snapshot."""</span>
+        <span class="k">if</span> <span class="n">snapshot</span><span class="p">[</span><span class="s2">"data"</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">refresh_analysis</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">render_template</span><span class="p">(</span>
+            <span class="s2">"analysis.html"</span><span class="p">,</span>
+            <span class="n">pull_status</span><span class="o">=</span><span class="n">busy_state</span><span class="o">.</span><span class="n">status</span><span class="p">(),</span>
+            <span class="n">last_result</span><span class="o">=</span><span class="n">read_pull_result</span><span class="p">(</span><span class="n">result_path</span><span class="p">),</span>
+            <span class="n">refreshed_at</span><span class="o">=</span><span class="n">snapshot</span><span class="p">[</span><span class="s2">"refreshed_at"</span><span class="p">],</span>
+            <span class="o">**</span><span class="n">snapshot</span><span class="p">[</span><span class="s2">"data"</span><span class="p">],</span>
+        <span class="p">)</span>
+
+    <span class="nd">@app</span><span class="o">.</span><span class="n">route</span><span class="p">(</span><span class="s2">"/pull-data"</span><span class="p">,</span> <span class="n">methods</span><span class="o">=</span><span class="p">[</span><span class="s2">"POST"</span><span class="p">])</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">pull_data</span><span class="p">():</span>
+<span class="w">        </span><span class="sd">"""POST /pull-data: start a pull (202 subprocess / 200 in-process), or 409 if busy."""</span>
+        <span class="k">if</span> <span class="n">busy_state</span><span class="o">.</span><span class="n">is_busy</span><span class="p">():</span>
+            <span class="k">return</span> <span class="n">jsonify</span><span class="p">(</span><span class="n">busy</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="mi">409</span>
+
+        <span class="c1"># Acquire before launching anything: the app's own PID holds the</span>
+        <span class="c1"># lock until the subprocess exists, then ownership moves to it.</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">busy_state</span><span class="o">.</span><span class="n">try_acquire</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getpid</span><span class="p">()):</span>
+            <span class="k">return</span> <span class="n">jsonify</span><span class="p">(</span><span class="n">busy</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="mi">409</span>
+
+        <span class="k">if</span> <span class="n">scraper</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">proc</span> <span class="o">=</span> <span class="n">pull_launcher</span><span class="p">()</span>
+            <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>  <span class="c1"># e.g. OSError starting the interpreter</span>
+                <span class="n">busy_state</span><span class="o">.</span><span class="n">release</span><span class="p">()</span>
+                <span class="n">app</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="s2">"Launching Pull Data failed"</span><span class="p">)</span>
+                <span class="k">return</span> <span class="n">jsonify</span><span class="p">(</span><span class="n">ok</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">exc</span><span class="p">)</span> <span class="ow">or</span> <span class="nb">type</span><span class="p">(</span><span class="n">exc</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="p">),</span> <span class="mi">500</span>
+            <span class="n">busy_state</span><span class="o">.</span><span class="n">set_owner</span><span class="p">(</span><span class="n">proc</span><span class="o">.</span><span class="n">pid</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">jsonify</span><span class="p">(</span><span class="n">ok</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="mi">202</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">result</span> <span class="o">=</span> <span class="n">run_pull</span><span class="p">(</span><span class="n">scraper</span><span class="p">,</span> <span class="n">loader</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>  <span class="c1"># any scrape/load failure is reported to the client</span>
+            <span class="n">app</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="s2">"Pull Data failed"</span><span class="p">)</span>
+            <span class="n">error</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">exc</span><span class="p">)</span> <span class="ow">or</span> <span class="nb">type</span><span class="p">(</span><span class="n">exc</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span>
+            <span class="n">write_pull_result</span><span class="p">(</span><span class="n">result_path</span><span class="p">,</span> <span class="n">pull_result</span><span class="p">(</span><span class="n">error</span><span class="o">=</span><span class="n">error</span><span class="p">))</span>
+            <span class="k">return</span> <span class="n">jsonify</span><span class="p">(</span><span class="n">ok</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="n">error</span><span class="p">),</span> <span class="mi">500</span>
+        <span class="k">finally</span><span class="p">:</span>
+            <span class="n">busy_state</span><span class="o">.</span><span class="n">release</span><span class="p">()</span>
+        <span class="n">write_pull_result</span><span class="p">(</span><span class="n">result_path</span><span class="p">,</span> <span class="n">pull_result</span><span class="p">(</span><span class="n">run</span><span class="o">=</span><span class="n">result</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">jsonify</span><span class="p">(</span><span class="n">ok</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">inserted</span><span class="o">=</span><span class="n">result</span><span class="p">[</span><span class="s2">"inserted"</span><span class="p">]),</span> <span class="mi">200</span>
+
+    <span class="nd">@app</span><span class="o">.</span><span class="n">route</span><span class="p">(</span><span class="s2">"/pull-status"</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">pull_status</span><span class="p">():</span>
+<span class="w">        </span><span class="sd">"""GET /pull-status: whether a pull is running, plus the last pull's result."""</span>
+        <span class="k">return</span> <span class="n">jsonify</span><span class="p">(</span><span class="n">running</span><span class="o">=</span><span class="n">busy_state</span><span class="o">.</span><span class="n">is_busy</span><span class="p">(),</span> <span class="n">last_result</span><span class="o">=</span><span class="n">read_pull_result</span><span class="p">(</span><span class="n">result_path</span><span class="p">))</span>
+
+    <span class="nd">@app</span><span class="o">.</span><span class="n">route</span><span class="p">(</span><span class="s2">"/update-analysis"</span><span class="p">,</span> <span class="n">methods</span><span class="o">=</span><span class="p">[</span><span class="s2">"POST"</span><span class="p">])</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">update_analysis</span><span class="p">():</span>
+<span class="w">        </span><span class="sd">"""POST /update-analysis: run refresh_fn and answer 200, or 409 if a pull is running."""</span>
+        <span class="k">if</span> <span class="n">busy_state</span><span class="o">.</span><span class="n">is_busy</span><span class="p">():</span>
+            <span class="k">return</span> <span class="n">jsonify</span><span class="p">(</span><span class="n">busy</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="mi">409</span>
+        <span class="n">refresh_fn</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">jsonify</span><span class="p">(</span><span class="n">ok</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="mi">200</span>
+
+    <span class="k">return</span> <span class="n">app</span></div>
+
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
+    <span class="n">create_app</span><span class="p">()</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">debug</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">threaded</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Vix Talbot.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

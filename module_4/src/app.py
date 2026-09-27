@@ -109,6 +109,7 @@ def create_app(
         table_checked = []
 
         def analysis_fn():
+            """Default analysis: get_analysis() on DATABASE_URL, creating the table on first use."""
             # First run against a fresh database: create the (empty) applicants
             # table so the page renders "N/A" answers instead of failing.
             if not table_checked:
@@ -120,11 +121,13 @@ def create_app(
     if loader is None:
 
         def loader(records):
+            """Default loader: insert records into DATABASE_URL via load_data."""
             return load_data.load_into_database(records, database_url)
 
     if pull_launcher is None:
 
         def pull_launcher():
+            """Default launcher: start pull_data.py as a background subprocess."""
             env = dict(os.environ)
             if database_url:
                 env["DATABASE_URL"] = database_url
@@ -134,6 +137,7 @@ def create_app(
     snapshot = {"data": None, "refreshed_at": None}
 
     def refresh_analysis():
+        """Recompute the analysis and store it, with a timestamp, as the page's snapshot."""
         snapshot["data"] = analysis_fn()
         snapshot["refreshed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
@@ -143,6 +147,7 @@ def create_app(
     @app.route("/")
     @app.route("/analysis")
     def analysis():
+        """GET / and /analysis: render the analysis page from the current snapshot."""
         if snapshot["data"] is None:
             refresh_analysis()
         return render_template(
@@ -155,6 +160,7 @@ def create_app(
 
     @app.route("/pull-data", methods=["POST"])
     def pull_data():
+        """POST /pull-data: start a pull (202 subprocess / 200 in-process), or 409 if busy."""
         if busy_state.is_busy():
             return jsonify(busy=True), 409
 
@@ -187,10 +193,12 @@ def create_app(
 
     @app.route("/pull-status")
     def pull_status():
+        """GET /pull-status: whether a pull is running, plus the last pull's result."""
         return jsonify(running=busy_state.is_busy(), last_result=read_pull_result(result_path))
 
     @app.route("/update-analysis", methods=["POST"])
     def update_analysis():
+        """POST /update-analysis: run refresh_fn and answer 200, or 409 if a pull is running."""
         if busy_state.is_busy():
             return jsonify(busy=True), 409
         refresh_fn()

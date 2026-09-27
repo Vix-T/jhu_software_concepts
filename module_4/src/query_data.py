@@ -262,6 +262,7 @@ def custom2(cur):
 
 
 def main():
+    """CLI: run every analysis question with raw SQL against DATABASE_URL and print the answers."""
     conn = psycopg2.connect(get_database_url())
 
     try:

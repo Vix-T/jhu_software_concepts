@@ -58,6 +58,7 @@ ON CONFLICT (url) DO NOTHING;
 
 
 def parse_float(value):
+    """Convert a scraped score (e.g. "3.91") to float; None if missing or not a number."""
     if value is None:
         return None
     try:
@@ -67,6 +68,7 @@ def parse_float(value):
 
 
 def parse_date(value):
+    """Parse a Grad Cafe "Date Added" string such as "Sep 08, 2026"; None if missing or malformed."""
     if not value:
         return None
     try:
@@ -76,6 +78,10 @@ def parse_date(value):
 
 
 def build_program(record):
+    """Combine University and Program Name into the "University, Program" program string.
+
+    Falls back to whichever part is present, or None if neither is.
+    """
     university = (record.get("University") or "").strip()
     program_name = (record.get("Program Name") or "").strip()
     if university and program_name:
@@ -84,6 +90,11 @@ def build_program(record):
 
 
 def record_to_row(record):
+    """Map one scraped/cleaned record (JSON keys) to an applicants-table row dict.
+
+    Raises:
+        ValueError: if the record has no URL, which is the table's natural key.
+    """
     url = record.get("URL")
     if not url:
         raise ValueError("missing URL (required as natural key)")

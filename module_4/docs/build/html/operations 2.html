@@ -1,0 +1,193 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Operational notes &mdash; Grad Café Applicant Analysis — Module 4</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Troubleshooting" href="troubleshooting.html" />
+    <link rel="prev" title="Testing guide" href="testing.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            Grad Café Applicant Analysis (Module 4)
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="overview.html">Overview &amp; setup</a></li>
+<li class="toctree-l1"><a class="reference internal" href="architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">API reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="clean.html">Module 2 cleaning step (upstream)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="testing.html">Testing guide</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Operational notes</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#busy-state-policy">Busy-state policy</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#idempotency-and-the-uniqueness-key">Idempotency and the uniqueness key</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#pulls-newest-first">Pulls: newest first</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#retry-cap">Retry cap</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#pull-result-reporting">Pull-result reporting</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="troubleshooting.html">Troubleshooting</a></li>
+<li class="toctree-l1"><a class="reference internal" href="known_issues.html">Known issues and limitations</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">Grad Café Applicant Analysis (Module 4)</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Operational notes</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/operations.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="operational-notes">
+<h1>Operational notes<a class="headerlink" href="#operational-notes" title="Link to this heading"></a></h1>
+<section id="busy-state-policy">
+<h2>Busy-state policy<a class="headerlink" href="#busy-state-policy" title="Link to this heading"></a></h2>
+<p>Only one pull runs at a time, and Update Analysis waits for it:</p>
+<ul class="simple">
+<li><p><strong>Lock first.</strong> <code class="docutils literal notranslate"><span class="pre">POST</span> <span class="pre">/pull-data</span></code> acquires the lock (owned by the app’s
+own process) <em>before</em> launching anything; only then is the pull
+subprocess started and ownership moved to its PID
+(<code class="docutils literal notranslate"><span class="pre">set_owner</span></code>). A request that finds the lock held gets
+<code class="docutils literal notranslate"><span class="pre">409</span> <span class="pre">{&quot;busy&quot;:</span> <span class="pre">true}</span></code> without launching anything.</p></li>
+<li><p><strong>Update Analysis</strong> also answers <code class="docutils literal notranslate"><span class="pre">409</span> <span class="pre">{&quot;busy&quot;:</span> <span class="pre">true}</span></code> while a pull is
+running, without recomputing.</p></li>
+<li><p><strong>Stale locks</strong> clean themselves up. The lock file records the holder’s
+PID and start time. If that process has exited (reaped with
+<code class="docutils literal notranslate"><span class="pre">waitpid</span></code>, or found dead by <code class="docutils literal notranslate"><span class="pre">os.kill(pid,</span> <span class="pre">0)</span></code> when it isn’t this
+process’s child) or the file is unreadable, the next status check removes
+it. There is no timeout, so a slow pull is never mistaken for a dead one.</p></li>
+<li><p><strong>Race-free.</strong> Every read or change of the lock holds an exclusive
+<code class="docutils literal notranslate"><span class="pre">fcntl.flock</span></code> on a companion <code class="docutils literal notranslate"><span class="pre">.scrape_lock.guard</span></code> file, so
+check-then-acquire and check-then-clear are atomic across threads and
+processes. Two simultaneous Pull Data requests yield exactly one 202 and
+one 409; the test suite checks this 200 times per run.</p></li>
+<li><p>In-process pulls (used by tests) release the lock in a <code class="docutils literal notranslate"><span class="pre">finally</span></code> block
+on every path.</p></li>
+</ul>
+</section>
+<section id="idempotency-and-the-uniqueness-key">
+<h2>Idempotency and the uniqueness key<a class="headerlink" href="#idempotency-and-the-uniqueness-key" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>The Grad Café result URL is the natural key: <code class="docutils literal notranslate"><span class="pre">url</span> <span class="pre">TEXT</span> <span class="pre">UNIQUE</span></code>.
+Records without a URL are rejected by the loader.</p></li>
+<li><p>Every insert is <code class="docutils literal notranslate"><span class="pre">INSERT</span> <span class="pre">...</span> <span class="pre">ON</span> <span class="pre">CONFLICT</span> <span class="pre">(url)</span> <span class="pre">DO</span> <span class="pre">NOTHING</span></code>, so loading the
+same data twice, or pulling an entry that’s already present, inserts
+nothing and reports it as a skipped duplicate.</p></li>
+<li><p>Each insert runs inside its own savepoint: a database error on one record
+rolls back only that record, and it is reported as failed.</p></li>
+<li><p>All inserts of a batch share one transaction, committed after the last
+record. Any <em>unexpected</em> exception mid-batch rolls back the whole batch,
+so a failed pull never leaves partial writes.</p></li>
+</ul>
+</section>
+<section id="pulls-newest-first">
+<h2>Pulls: newest first<a class="headerlink" href="#pulls-newest-first" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>Every pull starts at the first (newest) results page. There is no resume
+state across pulls.</p></li>
+<li><p>It keeps entries whose URL isn’t already in the database, and stops at
+the first page that yields nothing new, once 300 new entries are collected
+(<code class="docutils literal notranslate"><span class="pre">TARGET_COUNT</span></code>), or at the end of pagination.</p></li>
+<li><p>Pull Data needs Chrome with remote debugging on port 9222 and Grad Café’s
+Cloudflare challenge already cleared; the port is checked first, so a
+missing browser fails in milliseconds.</p></li>
+</ul>
+</section>
+<section id="retry-cap">
+<h2>Retry cap<a class="headerlink" href="#retry-cap" title="Link to this heading"></a></h2>
+<p>If the browser session crashes mid-pull, the scraper re-attaches and
+retries the page that failed, keeping what it has collected. After
+<code class="docutils literal notranslate"><span class="pre">max_retries</span></code> (default 3) consecutive failed retries it raises
+<code class="docutils literal notranslate"><span class="pre">ScrapeRetriesExhausted</span></code>; the pull is recorded as failed and the
+subprocess exits with status 1 (which releases the lock).</p>
+</section>
+<section id="pull-result-reporting">
+<h2>Pull-result reporting<a class="headerlink" href="#pull-result-reporting" title="Link to this heading"></a></h2>
+<p>Every pull, successful or not, writes its outcome atomically to
+<code class="docutils literal notranslate"><span class="pre">src/_pull_data_result.json</span></code> (or <code class="docutils literal notranslate"><span class="pre">PULL_RESULT_FILE</span></code> / the
+<code class="docutils literal notranslate"><span class="pre">PULL_RESULT_PATH</span></code> app config key):
+<code class="docutils literal notranslate"><span class="pre">{ok,</span> <span class="pre">inserted,</span> <span class="pre">skipped,</span> <span class="pre">failed,</span> <span class="pre">error,</span> <span class="pre">finished_at}</span></code>. The page shows it
+as “Last pull succeeded: N new rows”, “Last pull failed: &lt;reason&gt;” or “No
+pull has run yet.”, and <code class="docutils literal notranslate"><span class="pre">GET</span> <span class="pre">/pull-status</span></code> returns it as JSON.</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="testing.html" class="btn btn-neutral float-left" title="Testing guide" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="troubleshooting.html" class="btn btn-neutral float-right" title="Troubleshooting" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Vix Talbot.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

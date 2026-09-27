@@ -1,6 +1,6 @@
 """Busy state preventing overlapping Pull Data runs (and Update Analysis during a pull).
 
-Two implementations share one interface:
+Two implementations share one interface::
 
     try_acquire(pid=None) -> bool   atomically mark busy on behalf of `pid`
     set_owner(pid) -> None          re-point a held mark at `pid` (e.g. the
@@ -124,6 +124,7 @@ class FileLockBusyState:
         return {"running": False}
 
     def is_busy(self):
+        """True while a live holder has the lock (a stale lock is cleared first)."""
         return self.status()["running"]
 
     def try_acquire(self, pid=None):
@@ -165,6 +166,7 @@ class FileLockBusyState:
             os.replace(tmp_path, self.lock_path)
 
     def release(self):
+        """Remove the lock file; a no-op if there is none."""
         with self._guard():
             self._clear()
 
@@ -176,21 +178,26 @@ class InMemoryBusyState:
         self._info = None
 
     def status(self):
+        """Return {"running": False} or {"running": True, "pid": ..., "started_at": ...}."""
         if self._info is None:
             return {"running": False}
         return {"running": True, **self._info}
 
     def is_busy(self):
+        """True while the state is held."""
         return self._info is not None
 
     def try_acquire(self, pid=None):
+        """Mark busy on behalf of `pid`. Returns False if already held."""
         if self._info is not None:
             return False
         self._info = {"pid": pid, "started_at": _now_iso()}
         return True
 
     def set_owner(self, pid):
+        """Record `pid` as the holder, keeping the original started_at."""
         self._info["pid"] = pid
 
     def release(self):
+        """Clear the busy mark."""
         self._info = None

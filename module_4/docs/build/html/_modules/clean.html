@@ -1,0 +1,435 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>clean &mdash; Grad Café Applicant Analysis — Module 4</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            Grad Café Applicant Analysis (Module 4)
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../overview.html">Overview &amp; setup</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html">API reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../clean.html">Module 2 cleaning step (upstream)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../testing.html">Testing guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../operations.html">Operational notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../troubleshooting.html">Troubleshooting</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../known_issues.html">Known issues and limitations</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">Grad Café Applicant Analysis (Module 4)</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Module code</a></li>
+      <li class="breadcrumb-item active">clean</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for clean</h1><div class="highlight"><pre>
+<span></span><span class="sd">"""</span>
+<span class="sd">Cleans, normalizes, and persists Grad Cafe applicant data collected by</span>
+<span class="sd">scrape.py.</span>
+<span class="sd">"""</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">subprocess</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">tempfile</span>
+
+
+<div class="viewcode-block" id="clean_data">
+<a class="viewcode-back" href="../clean.html#clean.clean_data">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">clean_data</span><span class="p">(</span><span class="n">raw_data</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Clean and normalize a list of raw applicant entry records.</span>
+
+<span class="sd">    Ensures every record has the same set of keys (via</span>
+<span class="sd">    _normalize_missing_keys()), independent of and prior to save_data().</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        raw_data: A list of raw applicant entry records as produced by</span>
+<span class="sd">            scrape.scrape_data().</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        list: A new list of applicant entry records, each containing</span>
+<span class="sd">            the full set of keys observed across all records.</span>
+<span class="sd">    """</span>
+    <span class="k">return</span> <span class="n">_normalize_missing_keys</span><span class="p">(</span><span class="n">raw_data</span><span class="p">)</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_normalize_missing_keys</span><span class="p">(</span><span class="n">records</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Ensure every record in a list of dictionaries has the same set of</span>
+<span class="sd">    keys, filling in any keys missing from a given record with None.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        records: A list of dictionaries that may have inconsistent keys</span>
+<span class="sd">            across entries.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        list: A new list of dictionaries, each containing the full set</span>
+<span class="sd">            of keys observed across all records, with None used as the</span>
+<span class="sd">            value for any key a given record was missing.</span>
+<span class="sd">    """</span>
+    <span class="n">all_keys</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
+        <span class="n">all_keys</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="nb">dict</span><span class="o">.</span><span class="n">fromkeys</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
+
+    <span class="n">normalized</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
+        <span class="n">normalized_record</span> <span class="o">=</span> <span class="p">{</span><span class="n">key</span><span class="p">:</span> <span class="n">record</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">all_keys</span><span class="p">}</span>
+        <span class="n">normalized</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">normalized_record</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">normalized</span>
+
+
+<div class="viewcode-block" id="save_data">
+<a class="viewcode-back" href="../clean.html#clean.save_data">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">save_data</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Save cleaned applicant data to disk as a JSON array.</span>
+
+<span class="sd">    Scans all records to collect the full set of keys present anywhere</span>
+<span class="sd">    in the dataset, fills any record missing a given key with None so</span>
+<span class="sd">    every object in the output has identical keys, then writes the</span>
+<span class="sd">    result to path as a single formatted JSON array (not JSON Lines).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        data: The cleaned data to persist, as a list of dictionaries.</span>
+<span class="sd">        path: The destination file path.</span>
+<span class="sd">    """</span>
+    <span class="n">normalized_data</span> <span class="o">=</span> <span class="n">_normalize_missing_keys</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">normalized_data</span><span class="p">:</span>
+        <span class="n">record</span><span class="p">[</span><span class="s2">"Applicant Status"</span><span class="p">]</span> <span class="o">=</span> <span class="n">_normalize_status</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"Applicant Status"</span><span class="p">))</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="n">json</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">normalized_data</span><span class="p">,</span> <span class="n">f</span><span class="p">,</span> <span class="n">indent</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="load_data">
+<a class="viewcode-back" href="../clean.html#clean.load_data">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">load_data</span><span class="p">(</span><span class="n">path</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Load previously saved applicant data from disk.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        path: The file path to load data from, as a single JSON array</span>
+<span class="sd">            (as produced by save_data()).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        list: The loaded applicant entry records, as a list of dicts.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        FileNotFoundError: If no file exists at path.</span>
+<span class="sd">    """</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">path</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"No data file found at </span><span class="si">{</span><span class="n">path</span><span class="si">!r}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_normalize_status</span><span class="p">(</span><span class="n">status</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Normalize a raw applicant status string (e.g. admission decision)</span>
+<span class="sd">    into a consistent canonical form.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        status: The raw status string.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        str: The normalized status string.</span>
+<span class="sd">    """</span>
+    <span class="k">if</span> <span class="n">status</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="n">status</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">title</span><span class="p">()</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_get_worker_count</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Determine how many parallel LLM worker processes to use.</span>
+
+<span class="sd">    Targets roughly one physical core per LLM worker, since each worker</span>
+<span class="sd">    runs its own LLM inference subprocess and physical cores (rather than</span>
+<span class="sd">    logical/hyperthreaded ones) are what actually matter for CPU-bound</span>
+<span class="sd">    inference throughput. os.cpu_count() reports logical cores, so it's</span>
+<span class="sd">    halved here as an approximation of physical core count. The result</span>
+<span class="sd">    is capped at 2 workers per the assignment's guidance, and floored at</span>
+<span class="sd">    1 so this always returns a usable worker count even on a machine</span>
+<span class="sd">    that reports very few cores.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        int: The number of worker processes/chunks to use.</span>
+<span class="sd">    """</span>
+    <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">cpu_count</span><span class="p">()</span> <span class="o">//</span> <span class="mi">2</span><span class="p">))</span>
+
+
+<div class="viewcode-block" id="clean_with_llm_parallel">
+<a class="viewcode-back" href="../clean.html#clean.clean_with_llm_parallel">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">clean_with_llm_parallel</span><span class="p">(</span><span class="n">input_path</span><span class="p">,</span> <span class="n">output_path</span><span class="p">,</span> <span class="n">llm_script_path</span><span class="o">=</span><span class="s2">"llm_hosting/app.py"</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Clean applicant data by running it through the project's LLM-hosting</span>
+<span class="sd">    script in parallel worker subprocesses, then merge and save the</span>
+<span class="sd">    result.</span>
+
+<span class="sd">    Parallelization strategy:</span>
+<span class="sd">        The full input record set is split into N roughly-equal chunks,</span>
+<span class="sd">        where N = _get_worker_count() (one physical-core-sized worker per</span>
+<span class="sd">        chunk, capped at 2). Each chunk is written to its own temporary</span>
+<span class="sd">        JSON file and handed to a separate `python &lt;llm_script_path&gt;</span>
+<span class="sd">        --file &lt;chunk&gt;` subprocess, matching the assignment's documented</span>
+<span class="sd">        invocation pattern of redirecting each worker's stdout to its own</span>
+<span class="sd">        output file. All subprocesses are launched before any are waited</span>
+<span class="sd">        on, so they run concurrently; this function then blocks until</span>
+<span class="sd">        every worker has finished, reads each worker's JSONL stdout</span>
+<span class="sd">        output, merges all chunks' results back into a single list in</span>
+<span class="sd">        one combined pass, and writes that combined list to output_path</span>
+<span class="sd">        via save_data() (so the same missing-key normalization and</span>
+<span class="sd">        single-JSON-array format already used elsewhere is applied here</span>
+<span class="sd">        too). All temporary chunk/output files are removed once merging</span>
+<span class="sd">        is complete.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        input_path: Path to a JSON file containing a single JSON array</span>
+<span class="sd">            of records (as written by save_data()).</span>
+<span class="sd">        output_path: Path to write the cleaned, merged JSON array to.</span>
+<span class="sd">        llm_script_path: Path to the LLM-hosting script to invoke for</span>
+<span class="sd">            each chunk.</span>
+<span class="sd">    """</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">input_path</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="n">records</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+
+    <span class="n">worker_count</span> <span class="o">=</span> <span class="n">_get_worker_count</span><span class="p">()</span>
+
+    <span class="n">chunk_size</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">records</span><span class="p">)</span> <span class="o">//</span> <span class="n">worker_count</span>
+    <span class="n">chunks</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">start</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">worker_count</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="n">worker_count</span> <span class="o">-</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">end</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">records</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">end</span> <span class="o">=</span> <span class="n">start</span> <span class="o">+</span> <span class="n">chunk_size</span>
+        <span class="n">chunks</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">records</span><span class="p">[</span><span class="n">start</span><span class="p">:</span><span class="n">end</span><span class="p">])</span>
+        <span class="n">start</span> <span class="o">=</span> <span class="n">end</span>
+
+    <span class="n">processes</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">chunk</span> <span class="ow">in</span> <span class="n">chunks</span><span class="p">:</span>
+        <span class="n">input_temp</span> <span class="o">=</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">NamedTemporaryFile</span><span class="p">(</span>
+            <span class="n">mode</span><span class="o">=</span><span class="s2">"w"</span><span class="p">,</span> <span class="n">suffix</span><span class="o">=</span><span class="s2">".json"</span><span class="p">,</span> <span class="n">delete</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span>
+        <span class="p">)</span>
+        <span class="n">chunk_with_program</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="p">{</span>
+                <span class="o">**</span><span class="n">record</span><span class="p">,</span>
+                <span class="s2">"program"</span><span class="p">:</span> <span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">record</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'Program Name'</span><span class="p">)</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="s1">''</span><span class="si">}</span><span class="s2">, "</span>
+                    <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">record</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'University'</span><span class="p">)</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="s1">''</span><span class="si">}</span><span class="s2">"</span>
+                <span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">(</span><span class="s2">", "</span><span class="p">),</span>
+            <span class="p">}</span>
+            <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">chunk</span>
+        <span class="p">]</span>
+        <span class="n">json</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">chunk_with_program</span><span class="p">,</span> <span class="n">input_temp</span><span class="p">)</span>
+        <span class="n">input_temp</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+
+        <span class="n">output_temp</span> <span class="o">=</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">NamedTemporaryFile</span><span class="p">(</span><span class="n">suffix</span><span class="o">=</span><span class="s2">".json"</span><span class="p">,</span> <span class="n">delete</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">output_temp</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+
+        <span class="n">output_handle</span> <span class="o">=</span> <span class="nb">open</span><span class="p">(</span><span class="n">output_temp</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span>
+        <span class="n">process</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">(</span>
+            <span class="p">[</span><span class="s2">"python"</span><span class="p">,</span> <span class="n">llm_script_path</span><span class="p">,</span> <span class="s2">"--file"</span><span class="p">,</span> <span class="n">input_temp</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="s2">"--stdout"</span><span class="p">],</span>
+            <span class="n">stdout</span><span class="o">=</span><span class="n">output_handle</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">output_handle</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="n">processes</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">process</span><span class="p">,</span> <span class="n">input_temp</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">output_temp</span><span class="o">.</span><span class="n">name</span><span class="p">))</span>
+
+    <span class="k">for</span> <span class="n">process</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">processes</span><span class="p">:</span>
+        <span class="n">process</span><span class="o">.</span><span class="n">wait</span><span class="p">()</span>
+
+    <span class="n">failures</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">process</span><span class="o">.</span><span class="n">returncode</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">process</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">processes</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">process</span><span class="o">.</span><span class="n">returncode</span> <span class="o">!=</span> <span class="mi">0</span>
+    <span class="p">]</span>
+    <span class="k">if</span> <span class="n">failures</span><span class="p">:</span>
+        <span class="n">failure_details</span> <span class="o">=</span> <span class="s2">", "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"chunk </span><span class="si">{</span><span class="n">i</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2"> of </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">processes</span><span class="p">)</span><span class="si">}</span><span class="s2"> (exit code </span><span class="si">{</span><span class="n">returncode</span><span class="si">}</span><span class="s2">)"</span>
+            <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">returncode</span> <span class="ow">in</span> <span class="n">failures</span>
+        <span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"LLM worker(s) failed: </span><span class="si">{</span><span class="n">failure_details</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+    <span class="n">merged_results</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">input_path_temp</span><span class="p">,</span> <span class="n">output_path_temp</span> <span class="ow">in</span> <span class="n">processes</span><span class="p">:</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">output_path_temp</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">line</span> <span class="o">=</span> <span class="n">line</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+                <span class="k">if</span> <span class="n">line</span><span class="p">:</span>
+                    <span class="n">merged_results</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">line</span><span class="p">))</span>
+
+    <span class="n">save_data</span><span class="p">(</span><span class="n">merged_results</span><span class="p">,</span> <span class="n">output_path</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">input_path_temp</span><span class="p">,</span> <span class="n">output_path_temp</span> <span class="ow">in</span> <span class="n">processes</span><span class="p">:</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">input_path_temp</span><span class="p">)</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">output_path_temp</span><span class="p">)</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Workers used: </span><span class="si">{</span><span class="n">worker_count</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Records processed: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">merged_results</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Output written to: </span><span class="si">{</span><span class="n">output_path</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="clean_with_llm_parallel_deduped">
+<a class="viewcode-back" href="../clean.html#clean.clean_with_llm_parallel_deduped">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">clean_with_llm_parallel_deduped</span><span class="p">(</span><span class="n">input_path</span><span class="p">,</span> <span class="n">output_path</span><span class="p">,</span> <span class="n">llm_script_path</span><span class="o">=</span><span class="s2">"llm_hosting/app.py"</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Clean applicant data by sending only the unique (Program Name,</span>
+<span class="sd">    University) combinations through the LLM, then broadcasting each</span>
+<span class="sd">    result back out to every record that shares that combination.</span>
+
+<span class="sd">    Real-world Grad Cafe data contains many entries with the exact same</span>
+<span class="sd">    (Program Name, University) pair, so calling the LLM once per record</span>
+<span class="sd">    wastes most of its work re-cleaning strings it has already cleaned.</span>
+<span class="sd">    This function deduplicates down to the unique pairs, reuses</span>
+<span class="sd">    clean_with_llm_parallel() to clean just that small set, then maps</span>
+<span class="sd">    each unique pair's LLM output back onto every matching record in the</span>
+<span class="sd">    full original dataset. This avoids redundant LLM calls while still</span>
+<span class="sd">    producing a fully annotated output the same size as the input.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        input_path: Path to a JSON file containing a single JSON array</span>
+<span class="sd">            of records (as written by save_data()).</span>
+<span class="sd">        output_path: Path to write the cleaned, fully-annotated JSON</span>
+<span class="sd">            array to.</span>
+<span class="sd">        llm_script_path: Path to the LLM-hosting script to invoke,</span>
+<span class="sd">            forwarded to clean_with_llm_parallel().</span>
+<span class="sd">    """</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">input_path</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="n">records</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+
+    <span class="n">unique_combos</span> <span class="o">=</span> <span class="nb">dict</span><span class="o">.</span><span class="n">fromkeys</span><span class="p">(</span>
+        <span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"Program Name"</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">""</span><span class="p">,</span> <span class="n">record</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"University"</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">""</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span>
+    <span class="p">)</span>
+
+    <span class="n">unique_placeholders</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="p">{</span><span class="s2">"Program Name"</span><span class="p">:</span> <span class="n">program_name</span><span class="p">,</span> <span class="s2">"University"</span><span class="p">:</span> <span class="n">university</span><span class="p">}</span>
+        <span class="k">for</span> <span class="n">program_name</span><span class="p">,</span> <span class="n">university</span> <span class="ow">in</span> <span class="n">unique_combos</span>
+    <span class="p">]</span>
+
+    <span class="n">dedup_input</span> <span class="o">=</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">NamedTemporaryFile</span><span class="p">(</span>
+        <span class="n">mode</span><span class="o">=</span><span class="s2">"w"</span><span class="p">,</span> <span class="n">suffix</span><span class="o">=</span><span class="s2">".json"</span><span class="p">,</span> <span class="n">delete</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span>
+    <span class="p">)</span>
+    <span class="n">json</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">unique_placeholders</span><span class="p">,</span> <span class="n">dedup_input</span><span class="p">)</span>
+    <span class="n">dedup_input</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+
+    <span class="n">dedup_output</span> <span class="o">=</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">NamedTemporaryFile</span><span class="p">(</span><span class="n">suffix</span><span class="o">=</span><span class="s2">".json"</span><span class="p">,</span> <span class="n">delete</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+    <span class="n">dedup_output</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+
+    <span class="n">clean_with_llm_parallel</span><span class="p">(</span><span class="n">dedup_input</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">dedup_output</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">llm_script_path</span><span class="p">)</span>
+
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">dedup_output</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="n">cleaned_unique</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+
+    <span class="n">lookup</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"Program Name"</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">""</span><span class="p">,</span> <span class="n">record</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"University"</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">""</span><span class="p">):</span> <span class="p">{</span>
+            <span class="s2">"llm-generated-program"</span><span class="p">:</span> <span class="n">record</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"llm-generated-program"</span><span class="p">),</span>
+            <span class="s2">"llm-generated-university"</span><span class="p">:</span> <span class="n">record</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"llm-generated-university"</span><span class="p">),</span>
+        <span class="p">}</span>
+        <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">cleaned_unique</span>
+    <span class="p">}</span>
+
+    <span class="n">annotated_records</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
+        <span class="n">combo</span> <span class="o">=</span> <span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"Program Name"</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">""</span><span class="p">,</span> <span class="n">record</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"University"</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">""</span><span class="p">)</span>
+        <span class="n">annotated_records</span><span class="o">.</span><span class="n">append</span><span class="p">({</span><span class="o">**</span><span class="n">record</span><span class="p">,</span> <span class="o">**</span><span class="n">lookup</span><span class="p">[</span><span class="n">combo</span><span class="p">]})</span>
+
+    <span class="n">save_data</span><span class="p">(</span><span class="n">annotated_records</span><span class="p">,</span> <span class="n">output_path</span><span class="p">)</span>
+
+    <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">dedup_input</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">dedup_output</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+
+    <span class="n">total_records</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">records</span><span class="p">)</span>
+    <span class="n">unique_count</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">unique_placeholders</span><span class="p">)</span>
+    <span class="n">reduction_factor</span> <span class="o">=</span> <span class="n">total_records</span> <span class="o">/</span> <span class="n">unique_count</span> <span class="k">if</span> <span class="n">unique_count</span> <span class="k">else</span> <span class="mf">0.0</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Total records: </span><span class="si">{</span><span class="n">total_records</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unique records sent to LLM: </span><span class="si">{</span><span class="n">unique_count</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Reduction factor: </span><span class="si">{</span><span class="n">reduction_factor</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">x"</span><span class="p">)</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Vix Talbot.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,347 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>busy_state &mdash; Grad Café Applicant Analysis — Module 4</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            Grad Café Applicant Analysis (Module 4)
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../overview.html">Overview &amp; setup</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html">API reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../clean.html">Module 2 cleaning step (upstream)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../testing.html">Testing guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../operations.html">Operational notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../troubleshooting.html">Troubleshooting</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../known_issues.html">Known issues and limitations</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">Grad Café Applicant Analysis (Module 4)</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Module code</a></li>
+      <li class="breadcrumb-item active">busy_state</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for busy_state</h1><div class="highlight"><pre>
+<span></span><span class="sd">"""Busy state preventing overlapping Pull Data runs (and Update Analysis during a pull).</span>
+
+<span class="sd">Two implementations share one interface::</span>
+
+<span class="sd">    try_acquire(pid=None) -&gt; bool   atomically mark busy on behalf of `pid`</span>
+<span class="sd">    set_owner(pid) -&gt; None          re-point a held mark at `pid` (e.g. the</span>
+<span class="sd">                                    pull subprocess launched after acquiring)</span>
+<span class="sd">    release() -&gt; None               clear the busy mark</span>
+<span class="sd">    is_busy() -&gt; bool               True while a holder is marked busy</span>
+<span class="sd">    status() -&gt; dict                {"running": False} or</span>
+<span class="sd">                                    {"running": True, "pid": ..., "started_at": ...}</span>
+
+<span class="sd">FileLockBusyState is the production implementation. A global in-memory flag</span>
+<span class="sd">is not safe there: Flask's debug=True reloader can restart the worker</span>
+<span class="sd">process (wiping in-memory state) while a background pull subprocess it</span>
+<span class="sd">launched keeps running, and a plain variable wouldn't be shared across</span>
+<span class="sd">multiple worker processes under a real WSGI server either. Instead, the</span>
+<span class="sd">lock is a small JSON file on disk holding the holder's PID and start time.</span>
+
+<span class="sd">Every operation that reads or changes the lock runs while holding an</span>
+<span class="sd">exclusive fcntl.flock() on a companion guard file (&lt;lock_path&gt;.guard), so</span>
+<span class="sd">check-then-create (try_acquire) and check-then-clear (stale cleanup in</span>
+<span class="sd">status) are atomic across threads and processes: a reader can never see a</span>
+<span class="sd">half-written lock, and a stale-lock cleanup can never delete a lock another</span>
+<span class="sd">request just created. Creation also still uses os.O_CREAT | os.O_EXCL, and</span>
+<span class="sd">set_owner() swaps in new contents via a uniquely named temporary file and</span>
+<span class="sd">os.replace(). The guard file is never deleted. Staleness is detected by</span>
+<span class="sd">checking whether the recorded PID is still alive, not by a fixed timeout,</span>
+<span class="sd">so a legitimately slow run is never mistaken for a crash. When the PID is a</span>
+<span class="sd">child of this process, os.waitpid(WNOHANG) both checks it and reaps it once</span>
+<span class="sd">it has exited (an unreaped zombie would otherwise still pass an os.kill(pid, 0)</span>
+<span class="sd">check forever). A PID that isn't our child (e.g. launched before a reloader</span>
+<span class="sd">restart, or this process itself during an in-process pull) raises</span>
+<span class="sd">ChildProcessError there, and liveness falls back to os.kill(pid, 0).</span>
+
+<span class="sd">InMemoryBusyState is the test implementation: same interface, no files,</span>
+<span class="sd">no PIDs checked.</span>
+<span class="sd">"""</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">fcntl</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">tempfile</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">contextlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">contextmanager</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span><span class="p">,</span> <span class="n">timezone</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_now_iso</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span><span class="o">.</span><span class="n">isoformat</span><span class="p">()</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_pid_alive</span><span class="p">(</span><span class="n">pid</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""True if `pid` is still running. Reaps it if it is an exited child of ours."""</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">reaped_pid</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">waitpid</span><span class="p">(</span><span class="n">pid</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">WNOHANG</span><span class="p">)</span>
+    <span class="k">except</span> <span class="ne">ChildProcessError</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_pid_exists</span><span class="p">(</span><span class="n">pid</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">reaped_pid</span> <span class="o">==</span> <span class="mi">0</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_pid_exists</span><span class="p">(</span><span class="n">pid</span><span class="p">):</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">kill</span><span class="p">(</span><span class="n">pid</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+    <span class="k">except</span> <span class="ne">ProcessLookupError</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">False</span>
+    <span class="k">except</span> <span class="ne">PermissionError</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">True</span>
+    <span class="k">return</span> <span class="kc">True</span>
+
+
+<div class="viewcode-block" id="FileLockBusyState">
+<a class="viewcode-back" href="../api.html#busy_state.FileLockBusyState">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">FileLockBusyState</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Busy state backed by a JSON lock file at `lock_path`."""</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">lock_path</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">lock_path</span> <span class="o">=</span> <span class="n">lock_path</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">guard_path</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">lock_path</span><span class="si">}</span><span class="s2">.guard"</span>
+
+    <span class="nd">@contextmanager</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_guard</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Hold an exclusive flock on the guard file for the duration of the block."""</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">guard_path</span><span class="p">,</span> <span class="s2">"a"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">as</span> <span class="n">guard</span><span class="p">:</span>
+            <span class="n">fcntl</span><span class="o">.</span><span class="n">flock</span><span class="p">(</span><span class="n">guard</span><span class="p">,</span> <span class="n">fcntl</span><span class="o">.</span><span class="n">LOCK_EX</span><span class="p">)</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="k">yield</span>
+            <span class="k">finally</span><span class="p">:</span>
+                <span class="n">fcntl</span><span class="o">.</span><span class="n">flock</span><span class="p">(</span><span class="n">guard</span><span class="p">,</span> <span class="n">fcntl</span><span class="o">.</span><span class="n">LOCK_UN</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_clear</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">lock_path</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">FileNotFoundError</span><span class="p">:</span>
+            <span class="k">pass</span>
+
+<div class="viewcode-block" id="FileLockBusyState.status">
+<a class="viewcode-back" href="../api.html#busy_state.FileLockBusyState.status">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">status</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Return the lock's contents if its holder is alive; clear it if stale.</span>
+
+<span class="sd">        A lock file whose PID is no longer alive (e.g. left behind by a</span>
+<span class="sd">        crashed Flask process) or that can't be parsed is removed here.</span>
+<span class="sd">        """</span>
+        <span class="c1"># No lock file means nothing is running; answer without creating the</span>
+        <span class="c1"># guard file. A lock that does exist is only read under the guard, so</span>
+        <span class="c1"># it's never seen half-written.</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">lock_path</span><span class="p">):</span>
+            <span class="k">return</span> <span class="p">{</span><span class="s2">"running"</span><span class="p">:</span> <span class="kc">False</span><span class="p">}</span>
+        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_guard</span><span class="p">():</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_status_unguarded</span><span class="p">()</span></div>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_status_unguarded</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">lock_path</span><span class="p">):</span>
+            <span class="k">return</span> <span class="p">{</span><span class="s2">"running"</span><span class="p">:</span> <span class="kc">False</span><span class="p">}</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">lock_path</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">info</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+            <span class="n">pid</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"pid"</span><span class="p">)</span>
+        <span class="k">except</span> <span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">JSONDecodeError</span><span class="p">,</span> <span class="ne">OSError</span><span class="p">,</span> <span class="ne">AttributeError</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_clear</span><span class="p">()</span>
+            <span class="k">return</span> <span class="p">{</span><span class="s2">"running"</span><span class="p">:</span> <span class="kc">False</span><span class="p">}</span>
+
+        <span class="k">if</span> <span class="n">pid</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">_pid_alive</span><span class="p">(</span><span class="n">pid</span><span class="p">):</span>
+            <span class="k">return</span> <span class="p">{</span><span class="s2">"running"</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="o">**</span><span class="n">info</span><span class="p">}</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_clear</span><span class="p">()</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s2">"running"</span><span class="p">:</span> <span class="kc">False</span><span class="p">}</span>
+
+<div class="viewcode-block" id="FileLockBusyState.is_busy">
+<a class="viewcode-back" href="../api.html#busy_state.FileLockBusyState.is_busy">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">is_busy</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""True while a live holder has the lock (a stale lock is cleared first)."""</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">status</span><span class="p">()[</span><span class="s2">"running"</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="FileLockBusyState.try_acquire">
+<a class="viewcode-back" href="../api.html#busy_state.FileLockBusyState.try_acquire">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">try_acquire</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pid</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Atomically create the lock file recording `pid` (default: this process).</span>
+
+<span class="sd">        Returns True if acquired, False if another live holder has it.</span>
+<span class="sd">        """</span>
+        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_guard</span><span class="p">():</span>
+            <span class="c1"># Clears a stale lock first, so a crashed holder can't block forever.</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_status_unguarded</span><span class="p">()</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">fd</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">lock_path</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">O_CREAT</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">O_EXCL</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">O_WRONLY</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">FileExistsError</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">False</span>
+
+            <span class="k">with</span> <span class="n">os</span><span class="o">.</span><span class="n">fdopen</span><span class="p">(</span><span class="n">fd</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">json</span><span class="o">.</span><span class="n">dump</span><span class="p">({</span><span class="s2">"pid"</span><span class="p">:</span> <span class="n">pid</span> <span class="k">if</span> <span class="n">pid</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">os</span><span class="o">.</span><span class="n">getpid</span><span class="p">(),</span> <span class="s2">"started_at"</span><span class="p">:</span> <span class="n">_now_iso</span><span class="p">()},</span> <span class="n">f</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="FileLockBusyState.set_owner">
+<a class="viewcode-back" href="../api.html#busy_state.FileLockBusyState.set_owner">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">set_owner</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pid</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Record `pid` as the holder of the lock this process already holds.</span>
+
+<span class="sd">        Keeps the original started_at. The new contents are written to a</span>
+<span class="sd">        uniquely named temporary file and swapped in with os.replace(), so</span>
+<span class="sd">        the lock file is never left half-written, even if this process dies</span>
+<span class="sd">        mid-write.</span>
+<span class="sd">        """</span>
+        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_guard</span><span class="p">():</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">lock_path</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">info</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+            <span class="n">info</span><span class="p">[</span><span class="s2">"pid"</span><span class="p">]</span> <span class="o">=</span> <span class="n">pid</span>
+            <span class="n">fd</span><span class="p">,</span> <span class="n">tmp_path</span> <span class="o">=</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">mkstemp</span><span class="p">(</span>
+                <span class="nb">dir</span><span class="o">=</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">lock_path</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">"."</span><span class="p">,</span>
+                <span class="n">prefix</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">basename</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">lock_path</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span><span class="p">,</span>
+                <span class="n">suffix</span><span class="o">=</span><span class="s2">".tmp"</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">with</span> <span class="n">os</span><span class="o">.</span><span class="n">fdopen</span><span class="p">(</span><span class="n">fd</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">json</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">info</span><span class="p">,</span> <span class="n">f</span><span class="p">)</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">lock_path</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="FileLockBusyState.release">
+<a class="viewcode-back" href="../api.html#busy_state.FileLockBusyState.release">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">release</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Remove the lock file; a no-op if there is none."""</span>
+        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_guard</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_clear</span><span class="p">()</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="InMemoryBusyState">
+<a class="viewcode-back" href="../api.html#busy_state.InMemoryBusyState">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">InMemoryBusyState</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Busy state held in memory -- for tests and single-process use."""</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_info</span> <span class="o">=</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="InMemoryBusyState.status">
+<a class="viewcode-back" href="../api.html#busy_state.InMemoryBusyState.status">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">status</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Return {"running": False} or {"running": True, "pid": ..., "started_at": ...}."""</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_info</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">{</span><span class="s2">"running"</span><span class="p">:</span> <span class="kc">False</span><span class="p">}</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s2">"running"</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_info</span><span class="p">}</span></div>
+
+
+<div class="viewcode-block" id="InMemoryBusyState.is_busy">
+<a class="viewcode-back" href="../api.html#busy_state.InMemoryBusyState.is_busy">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">is_busy</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""True while the state is held."""</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_info</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span></div>
+
+
+<div class="viewcode-block" id="InMemoryBusyState.try_acquire">
+<a class="viewcode-back" href="../api.html#busy_state.InMemoryBusyState.try_acquire">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">try_acquire</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pid</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Mark busy on behalf of `pid`. Returns False if already held."""</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_info</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_info</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"pid"</span><span class="p">:</span> <span class="n">pid</span><span class="p">,</span> <span class="s2">"started_at"</span><span class="p">:</span> <span class="n">_now_iso</span><span class="p">()}</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="InMemoryBusyState.set_owner">
+<a class="viewcode-back" href="../api.html#busy_state.InMemoryBusyState.set_owner">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">set_owner</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pid</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Record `pid` as the holder, keeping the original started_at."""</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_info</span><span class="p">[</span><span class="s2">"pid"</span><span class="p">]</span> <span class="o">=</span> <span class="n">pid</span></div>
+
+
+<div class="viewcode-block" id="InMemoryBusyState.release">
+<a class="viewcode-back" href="../api.html#busy_state.InMemoryBusyState.release">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">release</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Clear the busy mark."""</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_info</span> <span class="o">=</span> <span class="kc">None</span></div>
+</div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Vix Talbot.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

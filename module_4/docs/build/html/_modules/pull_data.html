@@ -1,0 +1,349 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>pull_data &mdash; Grad Café Applicant Analysis — Module 4</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            Grad Café Applicant Analysis (Module 4)
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../overview.html">Overview &amp; setup</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html">API reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../clean.html">Module 2 cleaning step (upstream)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../testing.html">Testing guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../operations.html">Operational notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../troubleshooting.html">Troubleshooting</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../known_issues.html">Known issues and limitations</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">Grad Café Applicant Analysis (Module 4)</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Module code</a></li>
+      <li class="breadcrumb-item active">pull_data</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for pull_data</h1><div class="highlight"><pre>
+<span></span><span class="sd">"""Pull Data: fetch the newest Grad Cafe entries and load them into the DB.</span>
+
+<span class="sd">Split into injectable pieces plus a thin CLI:</span>
+
+<span class="sd">- scrape_new_entries(...) -&gt; list[dict]: the scraper. Every pull starts at</span>
+<span class="sd">  the first (newest) results page and stops at the first page whose entries</span>
+<span class="sd">  are all already in the database (scrape.scrape_newest), so a pull fetches</span>
+<span class="sd">  what's new rather than resuming deeper into history.</span>
+<span class="sd">- run_pull(scraper, loader) -&gt; dict: calls scraper(), hands the records to</span>
+<span class="sd">  loader(records) -&gt; (inserted, skipped, failed), and returns the counts.</span>
+<span class="sd">  app.py's in-process Pull Data path calls this directly with injected</span>
+<span class="sd">  callables.</span>
+<span class="sd">- main(): the CLI app.py's default Pull Data route launches as a background</span>
+<span class="sd">  subprocess (see busy_state.py for the lock that prevents two pulls from</span>
+<span class="sd">  running at once). Every run -- success or failure -- records its outcome</span>
+<span class="sd">  in a small JSON result file (write_pull_result) that the app reads to</span>
+<span class="sd">  show the last pull's result.</span>
+
+<span class="sd">Pull Data deliberately does NOT run the LLM-cleaning step -- newly</span>
+<span class="sd">scraped rows are loaded with llm_generated_program/llm_generated_university</span>
+<span class="sd">left NULL. LLM cleaning stays a separate, later, manual step (clean.py),</span>
+<span class="sd">consistent with how this pipeline has worked throughout the project.</span>
+
+<span class="sd">Precondition (cannot be automated away -- see module_3/README.txt): a</span>
+<span class="sd">Chrome browser must already be running with remote debugging enabled</span>
+<span class="sd">(--remote-debugging-port=9222), with Grad Cafe's Cloudflare challenge</span>
+<span class="sd">already manually cleared in that session. This script attaches to that</span>
+<span class="sd">existing, already-verified session; it does not launch a browser or solve</span>
+<span class="sd">the challenge itself. If that precondition isn't met, it fails fast with</span>
+<span class="sd">an explanatory message instead of hanging.</span>
+<span class="sd">"""</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">socket</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">tempfile</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span><span class="p">,</span> <span class="n">timezone</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">selenium.common.exceptions</span><span class="w"> </span><span class="kn">import</span> <span class="n">WebDriverException</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">load_data</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scrape</span><span class="w"> </span><span class="kn">import</span> <span class="n">scrape_newest</span>
+
+<span class="n">BASE_DIR</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)</span>
+<span class="n">PULL_RESULT_FILE</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">BASE_DIR</span><span class="p">,</span> <span class="s2">"_pull_data_result.json"</span><span class="p">)</span>
+<span class="c1"># The app passes its configured result path to the pull subprocess via this variable.</span>
+<span class="n">RESULT_FILE_ENV</span> <span class="o">=</span> <span class="s2">"PULL_RESULT_FILE"</span>
+
+<span class="c1"># Upper bound on new entries collected by one pull, so a single Pull Data</span>
+<span class="c1"># run's lock-held time stays short even after a long gap between pulls.</span>
+<span class="c1"># Normally a pull stops much earlier, at the first page with nothing new.</span>
+<span class="n">TARGET_COUNT</span> <span class="o">=</span> <span class="mi">300</span>
+
+<span class="n">DEBUGGER_HOST</span> <span class="o">=</span> <span class="s2">"127.0.0.1"</span>
+<span class="n">DEBUGGER_PORT</span> <span class="o">=</span> <span class="mi">9222</span>
+
+<span class="n">CLOUDFLARE_PRECONDITION_MESSAGE</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="s2">"PULL FAILED: could not attach to Chrome for scraping.</span><span class="se">\n</span><span class="s2">"</span>
+    <span class="s2">"This scraper requires a Chrome browser already running with remote "</span>
+    <span class="s2">"debugging enabled (--remote-debugging-port=9222), with Grad Cafe's "</span>
+    <span class="s2">"Cloudflare challenge already manually cleared in that session -- it "</span>
+    <span class="s2">"does not launch or solve anything itself. Start that session first, "</span>
+    <span class="s2">"then click Pull Data again."</span>
+<span class="p">)</span>
+
+
+<div class="viewcode-block" id="PullPreconditionError">
+<a class="viewcode-back" href="../api.html#pull_data.PullPreconditionError">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">PullPreconditionError</span><span class="p">(</span><span class="ne">RuntimeError</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Raised when there is no Chrome remote-debugging session to attach to."""</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_debugger_port_open</span><span class="p">(</span><span class="n">host</span><span class="o">=</span><span class="n">DEBUGGER_HOST</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="n">DEBUGGER_PORT</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Fast pre-flight check so a missing Chrome session fails in ~milliseconds.</span>
+
+<span class="sd">    webdriver.Chrome() itself does not fail fast here: with nothing</span>
+<span class="sd">    listening on DEBUGGER_PORT, Selenium's own driver-manager setup was</span>
+<span class="sd">    observed to hang for 30+ seconds with no exception before this check</span>
+<span class="sd">    was added, entirely unrelated to the actual attach target. A raw</span>
+<span class="sd">    socket connect to the same port fails (or succeeds) in under a</span>
+<span class="sd">    millisecond, so we check that ourselves before ever invoking Selenium.</span>
+<span class="sd">    """</span>
+    <span class="k">with</span> <span class="n">socket</span><span class="o">.</span><span class="n">socket</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">AF_INET</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SOCK_STREAM</span><span class="p">)</span> <span class="k">as</span> <span class="n">s</span><span class="p">:</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">settimeout</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">s</span><span class="o">.</span><span class="n">connect</span><span class="p">((</span><span class="n">host</span><span class="p">,</span> <span class="n">port</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">True</span>
+        <span class="k">except</span> <span class="ne">OSError</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+
+
+<div class="viewcode-block" id="scrape_new_entries">
+<a class="viewcode-back" href="../api.html#pull_data.scrape_new_entries">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">scrape_new_entries</span><span class="p">(</span>
+    <span class="n">target_count</span><span class="o">=</span><span class="n">TARGET_COUNT</span><span class="p">,</span>
+    <span class="n">driver_factory</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="n">port_check</span><span class="o">=</span><span class="n">_debugger_port_open</span><span class="p">,</span>
+    <span class="n">is_known</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="o">**</span><span class="n">scrape_kwargs</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Scrape the newest Grad Cafe entries not yet in the database.</span>
+
+<span class="sd">    With the default driver_factory (attach to the real Chrome session), the</span>
+<span class="sd">    debugger port is checked first (port_check, default _debugger_port_open)</span>
+<span class="sd">    and PullPreconditionError is raised if nothing is listening. A</span>
+<span class="sd">    caller-supplied driver_factory skips that check, since it doesn't attach</span>
+<span class="sd">    to Chrome. is_known(urls) -&gt; set defaults to a lookup in DATABASE_URL.</span>
+<span class="sd">    Extra keyword arguments (e.g. start_url, delay_seconds, max_retries) are</span>
+<span class="sd">    passed through to scrape.scrape_newest().</span>
+<span class="sd">    """</span>
+    <span class="k">if</span> <span class="n">driver_factory</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">port_check</span><span class="p">():</span>
+        <span class="k">raise</span> <span class="n">PullPreconditionError</span><span class="p">(</span><span class="n">CLOUDFLARE_PRECONDITION_MESSAGE</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">scrape_newest</span><span class="p">(</span>
+        <span class="n">is_known</span> <span class="ow">or</span> <span class="n">load_data</span><span class="o">.</span><span class="n">existing_urls</span><span class="p">,</span>
+        <span class="n">target_count</span><span class="o">=</span><span class="n">target_count</span><span class="p">,</span>
+        <span class="n">driver_factory</span><span class="o">=</span><span class="n">driver_factory</span><span class="p">,</span>
+        <span class="o">**</span><span class="n">scrape_kwargs</span><span class="p">,</span>
+    <span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="run_pull">
+<a class="viewcode-back" href="../api.html#pull_data.run_pull">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">run_pull</span><span class="p">(</span><span class="n">scraper</span><span class="p">,</span> <span class="n">loader</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Scrape, then load. Exceptions from either step propagate to the caller.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        scraper: Zero-argument callable returning a list of record dicts.</span>
+<span class="sd">        loader: Callable taking that list and returning</span>
+<span class="sd">            (inserted, skipped_duplicates, failed) like load_data.load_rows().</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: {"scraped": int, "inserted": int, "skipped": int, "failed": list}</span>
+<span class="sd">    """</span>
+    <span class="n">entries</span> <span class="o">=</span> <span class="n">scraper</span><span class="p">()</span>
+    <span class="n">inserted</span><span class="p">,</span> <span class="n">skipped</span><span class="p">,</span> <span class="n">failed</span> <span class="o">=</span> <span class="n">loader</span><span class="p">(</span><span class="n">entries</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">"scraped"</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">entries</span><span class="p">),</span>
+        <span class="s2">"inserted"</span><span class="p">:</span> <span class="n">inserted</span><span class="p">,</span>
+        <span class="s2">"skipped"</span><span class="p">:</span> <span class="n">skipped</span><span class="p">,</span>
+        <span class="s2">"failed"</span><span class="p">:</span> <span class="n">failed</span><span class="p">,</span>
+    <span class="p">}</span></div>
+
+
+
+<div class="viewcode-block" id="default_result_path">
+<a class="viewcode-back" href="../api.html#pull_data.default_result_path">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">default_result_path</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">"""The pull result file: $PULL_RESULT_FILE if set, else src/_pull_data_result.json."""</span>
+    <span class="k">return</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">RESULT_FILE_ENV</span><span class="p">)</span> <span class="ow">or</span> <span class="n">PULL_RESULT_FILE</span></div>
+
+
+
+<div class="viewcode-block" id="pull_result">
+<a class="viewcode-back" href="../api.html#pull_data.pull_result">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">pull_result</span><span class="p">(</span><span class="n">run</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Build the result record for a finished pull (run on success, error on failure)."""</span>
+    <span class="n">run</span> <span class="o">=</span> <span class="n">run</span> <span class="ow">or</span> <span class="p">{}</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">"ok"</span><span class="p">:</span> <span class="n">error</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="s2">"inserted"</span><span class="p">:</span> <span class="n">run</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"inserted"</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>
+        <span class="s2">"skipped"</span><span class="p">:</span> <span class="n">run</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"skipped"</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>
+        <span class="s2">"failed"</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">run</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"failed"</span><span class="p">,</span> <span class="p">[])),</span>
+        <span class="s2">"error"</span><span class="p">:</span> <span class="n">error</span><span class="p">,</span>
+        <span class="s2">"finished_at"</span><span class="p">:</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span><span class="o">.</span><span class="n">isoformat</span><span class="p">(</span><span class="n">timespec</span><span class="o">=</span><span class="s2">"seconds"</span><span class="p">),</span>
+    <span class="p">}</span></div>
+
+
+
+<div class="viewcode-block" id="write_pull_result">
+<a class="viewcode-back" href="../api.html#pull_data.write_pull_result">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">write_pull_result</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">result</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Atomically write `result` as JSON to `path` (temp file + os.replace)."""</span>
+    <span class="n">directory</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="n">path</span><span class="p">))</span>
+    <span class="n">fd</span><span class="p">,</span> <span class="n">tmp_path</span> <span class="o">=</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">mkstemp</span><span class="p">(</span><span class="nb">dir</span><span class="o">=</span><span class="n">directory</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="s2">".pull_result."</span><span class="p">,</span> <span class="n">suffix</span><span class="o">=</span><span class="s2">".tmp"</span><span class="p">)</span>
+    <span class="k">with</span> <span class="n">os</span><span class="o">.</span><span class="n">fdopen</span><span class="p">(</span><span class="n">fd</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="n">json</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">f</span><span class="p">)</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">,</span> <span class="n">path</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="read_pull_result">
+<a class="viewcode-back" href="../api.html#pull_data.read_pull_result">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">read_pull_result</span><span class="p">(</span><span class="n">path</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Return the last pull's result dict, or None if no (readable) result exists yet."""</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">result</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+    <span class="k">except</span> <span class="p">(</span><span class="ne">FileNotFoundError</span><span class="p">,</span> <span class="n">json</span><span class="o">.</span><span class="n">JSONDecodeError</span><span class="p">):</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="n">result</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="k">else</span> <span class="kc">None</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_fail</span><span class="p">(</span><span class="n">result_path</span><span class="p">,</span> <span class="n">error</span><span class="p">,</span> <span class="n">lines</span><span class="p">):</span>
+    <span class="n">write_pull_result</span><span class="p">(</span><span class="n">result_path</span><span class="p">,</span> <span class="n">pull_result</span><span class="p">(</span><span class="n">error</span><span class="o">=</span><span class="n">error</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">lines</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">line</span><span class="p">)</span>
+    <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="main">
+<a class="viewcode-back" href="../api.html#pull_data.main">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">(</span><span class="n">scraper</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">loader</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">result_path</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""CLI entry point; records the outcome in the result file and exits 1 on failure.</span>
+
+<span class="sd">    scraper/loader default to scrape_new_entries and</span>
+<span class="sd">    load_data.load_into_database (DATABASE_URL); result_path defaults to</span>
+<span class="sd">    default_result_path().</span>
+<span class="sd">    """</span>
+    <span class="n">result_path</span> <span class="o">=</span> <span class="n">result_path</span> <span class="ow">or</span> <span class="n">default_result_path</span><span class="p">()</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">run</span> <span class="o">=</span> <span class="n">run_pull</span><span class="p">(</span><span class="n">scraper</span> <span class="ow">or</span> <span class="n">scrape_new_entries</span><span class="p">,</span> <span class="n">loader</span> <span class="ow">or</span> <span class="n">load_data</span><span class="o">.</span><span class="n">load_into_database</span><span class="p">)</span>
+    <span class="k">except</span> <span class="n">PullPreconditionError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+        <span class="n">_fail</span><span class="p">(</span><span class="n">result_path</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">exc</span><span class="p">),</span> <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">exc</span><span class="p">)])</span>
+    <span class="k">except</span> <span class="n">WebDriverException</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+        <span class="c1"># The port was open (something is listening), but Selenium still</span>
+        <span class="c1"># couldn't attach/negotiate a session with it -- a different,</span>
+        <span class="c1"># rarer failure than the missing-Chrome case above.</span>
+        <span class="n">_fail</span><span class="p">(</span>
+            <span class="n">result_path</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">"could not attach to Chrome: </span><span class="si">{</span><span class="n">exc</span><span class="si">}</span><span class="s2">"</span><span class="o">.</span><span class="n">strip</span><span class="p">(),</span>
+            <span class="p">[</span><span class="n">CLOUDFLARE_PRECONDITION_MESSAGE</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"Underlying error: </span><span class="si">{</span><span class="n">exc</span><span class="si">}</span><span class="s2">"</span><span class="p">],</span>
+        <span class="p">)</span>
+    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>  <span class="c1"># retries exhausted, database errors, anything else: record it</span>
+        <span class="n">message</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">exc</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">exc</span><span class="si">}</span><span class="s2">"</span>
+        <span class="n">_fail</span><span class="p">(</span><span class="n">result_path</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span> <span class="p">[</span><span class="sa">f</span><span class="s2">"PULL FAILED: </span><span class="si">{</span><span class="n">message</span><span class="si">}</span><span class="s2">"</span><span class="p">])</span>
+
+    <span class="n">write_pull_result</span><span class="p">(</span><span class="n">result_path</span><span class="p">,</span> <span class="n">pull_result</span><span class="p">(</span><span class="n">run</span><span class="o">=</span><span class="n">run</span><span class="p">))</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">"Pull complete: </span><span class="si">{</span><span class="n">run</span><span class="p">[</span><span class="s1">'scraped'</span><span class="p">]</span><span class="si">}</span><span class="s2"> entries scraped, </span><span class="si">{</span><span class="n">run</span><span class="p">[</span><span class="s1">'inserted'</span><span class="p">]</span><span class="si">}</span><span class="s2"> inserted, "</span>
+        <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">run</span><span class="p">[</span><span class="s1">'skipped'</span><span class="p">]</span><span class="si">}</span><span class="s2"> already present, </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">run</span><span class="p">[</span><span class="s1">'failed'</span><span class="p">])</span><span class="si">}</span><span class="s2"> failed to parse."</span>
+    <span class="p">)</span></div>
+
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
+    <span class="n">main</span><span class="p">()</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Vix Talbot.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

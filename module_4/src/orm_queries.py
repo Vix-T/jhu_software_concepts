@@ -5,7 +5,7 @@ query_data.py for Q8/Q9 university/program matching (imported, not
 redefined), and the same Applicant model / session factory from models.py. The
 ORM query functions themselves (orm_q1/orm_q4/orm_q5/orm_q8/orm_q9/
 orm_custom1) use no raw SQL (text()) or psycopg2 cursors anywhere --
-everything is expressed with select()/where()/func/and_/or_/case().
+everything is expressed with ``select()``/``where()``/``func``/``and_``/``or_``/``case()``.
 
 main()'s comparison harness is the one exception: it calls
 query_data.py's own raw-SQL functions (q1/q4/q5/q8/q9/custom1) live,
@@ -274,6 +274,7 @@ def format_comparison(checks):
 
 
 def main():
+    """CLI: compute the comparable questions via the ORM and via query_data's raw SQL, and print both."""
     with make_session_factory()() as session:
         q1_count = orm_q1(session)
         q4_avg, q4_n = orm_q4(session)

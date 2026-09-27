@@ -26,10 +26,12 @@ def make_session_factory(database_url=None):
 
 
 class Base(DeclarativeBase):
-    pass
+    """SQLAlchemy declarative base for the Module 4 ORM models."""
 
 
 class Applicant(Base):
+    """One row of the applicants table (schema owned by load_data.CREATE_TABLE_SQL)."""
+
     __tablename__ = "applicants"
 
     p_id: Mapped[int] = mapped_column(primary_key=True)
