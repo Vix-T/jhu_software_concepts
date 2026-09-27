@@ -12,7 +12,9 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest, so a runner-image migration can't change the environment unannounced.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
 
     services:
       postgres:
@@ -34,10 +36,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
