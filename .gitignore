@@ -65,3 +65,4 @@ module_4/docs/build/html/.doctrees/
 # Coverage output (pytest-cov)
 .coverage
 htmlcov/
+module_4/CLAUDE.md
