@@ -28,7 +28,7 @@ from sqlalchemy.engine import make_url
 
 import load_data
 from config import db_env
-from flask_app import create_app
+from flask_app import AppDependencies, create_app
 from busy_state import InMemoryBusyState
 
 ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
@@ -324,7 +324,7 @@ def make_app(test_database_url, busy_state, _applicants_table):
 
     def build(**overrides):
         overrides.setdefault("busy_state", busy_state)
-        return create_app(config={"DB_URL": test_database_url, "TESTING": True}, **overrides)
+        return create_app({"DB_URL": test_database_url, "TESTING": True}, AppDependencies(**overrides))
 
     return build
 

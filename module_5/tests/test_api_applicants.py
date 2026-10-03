@@ -7,7 +7,7 @@ from conftest import make_record, make_records
 
 from applicant_search import RESULT_COLUMNS
 from busy_state import InMemoryBusyState
-from flask_app import create_app
+from flask_app import AppDependencies, create_app
 
 pytestmark = [pytest.mark.web, pytest.mark.db]
 
@@ -193,7 +193,7 @@ def unreachable_api():
         closed_port = probe.getsockname()[1]
     app = create_app(
         {"DB_URL": f"postgresql://nobody@127.0.0.1:{closed_port}/unreachable_test", "TESTING": True},
-        busy_state=InMemoryBusyState(),
+        AppDependencies(busy_state=InMemoryBusyState()),
     )
     return app.test_client()
 

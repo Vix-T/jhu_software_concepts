@@ -11,6 +11,24 @@ import re
 from psycopg2 import sql
 
 APPLICANTS = sql.Identifier("applicants")
+# The applicants table's columns, in table order (see load_data.CREATE_TABLE_SQL).
+APPLICANT_COLUMNS = (
+    "p_id",
+    "program",
+    "comments",
+    "date_added",
+    "url",
+    "status",
+    "term",
+    "us_or_international",
+    "gpa",
+    "gre",
+    "gre_v",
+    "gre_aw",
+    "degree",
+    "llm_generated_program",
+    "llm_generated_university",
+)
 
 MIN_LIMIT = 1
 DEFAULT_LIMIT = 10

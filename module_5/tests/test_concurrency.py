@@ -10,7 +10,7 @@ import threading
 
 import pytest
 
-from flask_app import create_app
+from flask_app import AppDependencies, create_app
 from busy_state import FileLockBusyState
 
 pytestmark = pytest.mark.buttons
@@ -33,8 +33,7 @@ def test_simultaneous_pulls_launch_exactly_once(tmp_path, test_database_url):
 
     app = create_app(
         {"DB_URL": test_database_url, "TESTING": True},
-        busy_state=lock,
-        pull_launcher=launcher,
+        AppDependencies(busy_state=lock, pull_launcher=launcher),
     )
 
     for round_number in range(ROUNDS):

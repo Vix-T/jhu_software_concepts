@@ -16,26 +16,11 @@ executes them on a read-only connection.
 from psycopg2 import sql
 
 import load_data
-from sql_utils import APPLICANTS, ValidationError, clamp_limit
+from sql_utils import APPLICANT_COLUMNS, APPLICANTS, ValidationError, clamp_limit
 
 # Columns returned to the client: a fixed list, never SELECT * (the
 # free-text comments column is deliberately left out).
-RESULT_COLUMNS = (
-    "p_id",
-    "program",
-    "date_added",
-    "url",
-    "status",
-    "term",
-    "us_or_international",
-    "gpa",
-    "gre",
-    "gre_v",
-    "gre_aw",
-    "degree",
-    "llm_generated_program",
-    "llm_generated_university",
-)
+RESULT_COLUMNS = tuple(column for column in APPLICANT_COLUMNS if column != "comments")
 
 # Public sort key -> table column. Only these values are accepted.
 SORT_COLUMNS = {
@@ -84,10 +69,12 @@ def build_applicants_query(limit=None, sort=DEFAULT_SORT, order=DEFAULT_ORDER, u
         if len(university) > MAX_FILTER_LENGTH:
             raise ValidationError(f"university must be at most {MAX_FILTER_LENGTH} characters")
         where = sql.SQL("WHERE {} ILIKE %s ESCAPE %s").format(sql.Identifier(UNIVERSITY_COLUMN))
-        params += ["".join((LIKE_WILDCARD, escape_like(university.strip()), LIKE_WILDCARD)), LIKE_ESCAPE]
+        pattern = "".join((LIKE_WILDCARD, escape_like(university.strip()), LIKE_WILDCARD))
+        params += [pattern, LIKE_ESCAPE]
 
     stmt = sql.SQL(
-        "SELECT {columns} FROM {table} {where} ORDER BY {sort} {order} NULLS LAST, {tiebreak} LIMIT %s"
+        "SELECT {columns} FROM {table} {where} "
+        "ORDER BY {sort} {order} NULLS LAST, {tiebreak} LIMIT %s"
     ).format(
         columns=sql.SQL(", ").join(sql.Identifier(column) for column in RESULT_COLUMNS),
         table=APPLICANTS,

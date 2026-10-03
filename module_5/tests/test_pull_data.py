@@ -11,6 +11,7 @@ from conftest import SURVEY_URL, DriverFactory, FakeScraper, Spy, survey_pages
 from selenium.common.exceptions import WebDriverException
 
 import pull_data
+from scrape import BrowserSettings
 
 pytestmark = pytest.mark.buttons
 
@@ -52,7 +53,8 @@ def test_scrape_new_entries_with_driver_factory_skips_port_check():
 
     # Default is_known: the (empty) test database, so page 1's entries are all new.
     entries = pull_data.scrape_new_entries(
-        driver_factory=factory, port_check=port_check, start_url=SURVEY_URL, delay_seconds=0,
+        browser=BrowserSettings(driver_factory=factory, start_url=SURVEY_URL, delay_seconds=0),
+        port_check=port_check,
     )
 
     assert port_check.calls == []
@@ -144,19 +146,33 @@ def test_main_exits_when_selenium_cannot_attach(capsys, row_count, pull_result_p
     assert result["error"] == "could not attach to Chrome: Message: cannot connect to chrome"
 
 
-def test_main_records_unexpected_failure(capsys, row_count, tmp_path):
+def test_main_records_os_failure(capsys, row_count, tmp_path):
     result_path = tmp_path / "explicit.json"
 
     def broken_loader(records):
-        raise RuntimeError("disk full")
+        raise OSError(errno.ENOSPC, "No space left on device")
 
     with pytest.raises(SystemExit) as excinfo:
         pull_data.main(scraper=FakeScraper([{"URL": "u"}]), loader=broken_loader, result_path=str(result_path))
 
     assert excinfo.value.code == 1
-    assert capsys.readouterr().out == "PULL FAILED: RuntimeError: disk full\n"
-    assert _result(result_path)["error"] == "RuntimeError: disk full"
+    message = "OSError: [Errno 28] No space left on device"
+    assert capsys.readouterr().out == f"PULL FAILED: {message}\n"
+    assert _result(result_path)["error"] == message
     assert row_count() == 0
+
+
+def test_main_lets_programming_errors_propagate(tmp_path):
+    # Not a failure main() knows how to handle: no exit 1, no recorded result --
+    # the traceback surfaces, and the app's pending record reports the crash.
+    result_path = tmp_path / "explicit.json"
+
+    def buggy_loader(records):
+        raise AttributeError("'NoneType' object has no attribute 'get'")
+
+    with pytest.raises(AttributeError):
+        pull_data.main(scraper=FakeScraper([{"URL": "u"}]), loader=buggy_loader, result_path=str(result_path))
+    assert not result_path.exists()
 
 
 def test_cli_entry_point_fails_fast_without_chrome(monkeypatch, capsys, pull_result_path):

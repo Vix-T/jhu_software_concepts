@@ -28,6 +28,15 @@ def make_session_factory(database_url=None):
 class Base(DeclarativeBase):
     """SQLAlchemy declarative base for the Module 5 ORM models."""
 
+    @classmethod
+    def column_names(cls):
+        """The mapped table's column names, in table order."""
+        return [column.name for column in cls.__table__.columns]
+
+    def to_dict(self):
+        """This row as a dict keyed by column name, in table order."""
+        return {name: getattr(self, name) for name in self.column_names()}
+
 
 class Applicant(Base):
     """One row of the applicants table (schema owned by load_data.CREATE_TABLE_SQL)."""

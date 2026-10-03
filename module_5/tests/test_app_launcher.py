@@ -59,7 +59,7 @@ def fake_popen(monkeypatch):
 
 def test_in_process_pull_with_default_lock_and_loader(config, lock_path, fake_records, row_count):
     scraper = FakeScraper(fake_records)
-    client = app_module.create_app(config, scraper=scraper).test_client()
+    client = app_module.create_app(config, app_module.AppDependencies(scraper=scraper)).test_client()
 
     response = client.post("/pull-data")
     assert response.status_code == 200
@@ -128,8 +128,7 @@ def test_lost_acquire_race_returns_409_without_launching(test_database_url):
     launcher = Spy()
     client = app_module.create_app(
         {"DB_URL": test_database_url, "TESTING": True},
-        busy_state=RacingBusyState(),
-        pull_launcher=launcher,
+        app_module.AppDependencies(busy_state=RacingBusyState(), pull_launcher=launcher),
     ).test_client()
 
     response = client.post("/pull-data")

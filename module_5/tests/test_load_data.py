@@ -79,8 +79,8 @@ def test_build_program_combinations():
 
 
 def test_database_error_on_one_record_keeps_the_rest(db_conn, fetch_rows):
-    # psycopg2 can't adapt a dict for the comments column: that insert fails
-    # inside its savepoint, and the records before and after it still load.
+    # A dict in the comments column is rejected by record_to_row() before it
+    # reaches psycopg2; the records before and after it still load.
     records = [make_record(0), make_record(1, Comments={"nested": "object"}), make_record(2)]
 
     inserted, skipped, failed = load_data.load_rows(records, db_conn)
@@ -88,7 +88,7 @@ def test_database_error_on_one_record_keeps_the_rest(db_conn, fetch_rows):
     assert (inserted, skipped) == (2, 0)
     [(index, reason)] = failed
     assert index == 1
-    assert "can't adapt type 'dict'" in reason
+    assert reason == "field 'comments' must be text, got dict"
     assert [row["url"] for row in fetch_rows()] == [records[0]["URL"], records[2]["URL"]]
 
 

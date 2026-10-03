@@ -3,6 +3,8 @@
 import pytest
 from conftest import FakeScraper, make_records
 
+from scrape import ScrapeRetriesExhausted
+
 pytestmark = pytest.mark.buttons
 
 
@@ -46,7 +48,7 @@ def test_busy_released_after_pull(client, busy_state):
 
 
 def test_pull_scraper_raises(make_app, busy_state, loader_spy, row_count):
-    scraper = FakeScraper(raises=RuntimeError("Chrome session lost"))
+    scraper = FakeScraper(raises=ScrapeRetriesExhausted("Chrome session lost"))
     client = make_app(scraper=scraper, loader=loader_spy).test_client()
 
     response = client.post("/pull-data")
@@ -59,15 +61,13 @@ def test_pull_scraper_raises(make_app, busy_state, loader_spy, row_count):
 
 def test_pull_loader_fails_midbatch_rolls_back(make_app, busy_state, real_loader, row_count):
     # Two valid records are inserted first; the third is not a dict, so
-    # load_rows raises AttributeError mid-batch -- an unexpected error that
-    # must roll back the whole batch, not just the bad record.
+    # load_rows raises AttributeError mid-batch -- a programming error the
+    # route does not catch. It must still roll back the whole batch (not just
+    # the bad record), and `finally` must still release the busy lock.
     records = make_records(2) + ["not a record"]
     client = make_app(scraper=FakeScraper(records), loader=real_loader).test_client()
 
-    response = client.post("/pull-data")
-    assert response.status_code == 500
-    body = response.get_json()
-    assert body["ok"] is False
-    assert "get" in body["error"]
+    with pytest.raises(AttributeError, match="get"):
+        client.post("/pull-data")
     assert row_count() == 0
     assert busy_state.is_busy() is False

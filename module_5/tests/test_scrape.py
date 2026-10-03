@@ -60,7 +60,11 @@ def _without_raw_text(entries):
 
 
 def _paths(tmp_path):
-    return {"state_file": str(tmp_path / "state.json"), "captured_dir": str(tmp_path / "pages")}
+    return scrape.CaptureFiles(state_file=str(tmp_path / "state.json"), captured_dir=str(tmp_path / "pages"))
+
+
+def _browser(**settings):
+    return scrape.BrowserSettings(**settings)
 
 
 def _state(tmp_path):
@@ -78,7 +82,7 @@ def test_attach_to_chrome_uses_debugger_address(monkeypatch):
             self.options = options
             created.append(self)
 
-    monkeypatch.setattr(scrape.webdriver, "Chrome", FakeChrome)
+    monkeypatch.setattr(scrape, "ChromeWebDriver", FakeChrome)
 
     driver = scrape.attach_to_chrome()
     assert created == [driver]
@@ -91,7 +95,9 @@ def test_attach_to_chrome_uses_debugger_address(monkeypatch):
 def test_capture_pages_until_no_next_link(tmp_path, capsys):
     factory = DriverFactory(survey_pages())
 
-    captured = scrape.capture_pages(start_url=SURVEY_URL, delay_seconds=0, driver_factory=factory, **_paths(tmp_path))
+    captured = scrape.capture_pages(
+        _browser(start_url=SURVEY_URL, delay_seconds=0, driver_factory=factory), _paths(tmp_path)
+    )
 
     assert captured == 2
     assert factory.visited == [SURVEY_URL, PAGE_2_URL]
@@ -103,14 +109,14 @@ def test_capture_pages_until_no_next_link(tmp_path, capsys):
 
 def test_capture_pages_target_then_resume(tmp_path, capsys):
     factory = DriverFactory(survey_pages())
-    kwargs = dict(start_url=SURVEY_URL, delay_seconds=0, driver_factory=factory, **_paths(tmp_path))
+    browser = _browser(start_url=SURVEY_URL, delay_seconds=0, driver_factory=factory)
 
-    assert scrape.capture_pages(target_pages=1, **kwargs) == 1
+    assert scrape.capture_pages(browser, _paths(tmp_path), target_pages=1) == 1
     assert _state(tmp_path) == {"next_url": PAGE_2_URL, "pages_captured": 1}
     assert "Stopped because: reached target_pages" in capsys.readouterr().out
 
     # Resumes from the saved next_url and keeps numbering pages from 2.
-    assert scrape.capture_pages(**kwargs) == 1
+    assert scrape.capture_pages(browser, _paths(tmp_path)) == 1
     assert factory.visited == [SURVEY_URL, PAGE_2_URL]
     assert (tmp_path / "pages" / "page_00002.html").read_text() == load_fixture("page_2.html")
     assert _state(tmp_path) == {"next_url": None, "pages_captured": 2}
@@ -119,7 +125,9 @@ def test_capture_pages_target_then_resume(tmp_path, capsys):
 def test_capture_pages_stops_when_next_link_does_not_advance(tmp_path, capsys):
     factory = DriverFactory({SELF_LINK_URL: load_fixture("page_self_link.html")})
 
-    captured = scrape.capture_pages(start_url=SELF_LINK_URL, delay_seconds=0, driver_factory=factory, **_paths(tmp_path))
+    captured = scrape.capture_pages(
+        _browser(start_url=SELF_LINK_URL, delay_seconds=0, driver_factory=factory), _paths(tmp_path)
+    )
 
     assert captured == 1
     assert factory.visited == [SELF_LINK_URL]
@@ -131,7 +139,7 @@ def test_capture_pages_saves_page_without_results_table(tmp_path, capsys):
     factory = DriverFactory({SURVEY_URL: load_fixture("page_no_results.html")})
 
     captured = scrape.capture_pages(
-        start_url=SURVEY_URL, delay_seconds=0, wait_timeout=0, driver_factory=factory, **_paths(tmp_path)
+        _browser(start_url=SURVEY_URL, delay_seconds=0, wait_timeout=0, driver_factory=factory), _paths(tmp_path)
     )
 
     assert captured == 1
@@ -145,7 +153,7 @@ def test_capture_pages_already_at_last_page(tmp_path, capsys):
     (tmp_path / "state.json").write_text(json.dumps({"next_url": None, "pages_captured": 2}))
     factory = DriverFactory(survey_pages())
 
-    assert scrape.capture_pages(delay_seconds=0, driver_factory=factory, **_paths(tmp_path)) == 0
+    assert scrape.capture_pages(_browser(delay_seconds=0, driver_factory=factory), _paths(tmp_path)) == 0
     assert factory.drivers == []
     assert "already at the last page" in capsys.readouterr().out
 
@@ -196,8 +204,8 @@ def test_scrape_data_batches_until_natural_end(tmp_path, capsys):
     factory = DriverFactory(survey_pages())
 
     entries = scrape.scrape_data(
-        target_count=100, start_url=SURVEY_URL, delay_seconds=0, batch_size=1,
-        driver_factory=factory, **_paths(tmp_path),
+        _browser(start_url=SURVEY_URL, delay_seconds=0, driver_factory=factory), _paths(tmp_path),
+        target_count=100, batch_size=1,
     )
 
     assert _without_raw_text(entries) == PAGE_1_ENTRIES + PAGE_2_ENTRIES
@@ -212,8 +220,8 @@ def test_scrape_data_stops_at_target_count(tmp_path, capsys):
     factory = DriverFactory(survey_pages())
 
     entries = scrape.scrape_data(
-        target_count=3, start_url=SURVEY_URL, delay_seconds=0, batch_size=1,
-        driver_factory=factory, **_paths(tmp_path),
+        _browser(start_url=SURVEY_URL, delay_seconds=0, driver_factory=factory), _paths(tmp_path),
+        target_count=3, batch_size=1,
     )
 
     assert _without_raw_text(entries) == PAGE_1_ENTRIES
@@ -232,8 +240,9 @@ def test_scrape_data_retries_after_browser_crash(tmp_path, capsys):
         return pages_factory()
 
     entries = scrape.scrape_data(
-        target_count=100, start_url=SURVEY_URL, delay_seconds=0, crash_retry_wait=0,
-        driver_factory=flaky_factory, **_paths(tmp_path),
+        _browser(start_url=SURVEY_URL, delay_seconds=0, crash_retry_wait=0, driver_factory=flaky_factory),
+        _paths(tmp_path),
+        target_count=100,
     )
 
     assert len(attempts) == 2

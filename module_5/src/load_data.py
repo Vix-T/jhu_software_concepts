@@ -9,8 +9,8 @@ from datetime import datetime
 import psycopg2
 from psycopg2 import sql
 
-from config import psycopg2_dsn
-from sql_utils import APPLICANTS, MAX_LIMIT, clamp_limit
+from config import ConfigError, psycopg2_dsn
+from sql_utils import APPLICANT_COLUMNS, APPLICANTS, MAX_LIMIT, clamp_limit
 
 # The cleaned Module 2 dataset, bundled with the repo (gzipped: 50.5 MB -> 4.0 MB).
 DATA_FILE = os.path.join(
@@ -47,26 +47,14 @@ CREATE TABLE IF NOT EXISTS {} (
 """
 ).format(APPLICANTS)
 
-# Columns written by INSERT_SQL, in order; record_to_row() returns a dict with
-# exactly these keys, bound by name through sql.Placeholder(column).
-INSERT_COLUMNS = (
-    "program",
-    "comments",
-    "date_added",
-    "url",
-    "status",
-    "term",
-    "us_or_international",
-    "gpa",
-    "gre",
-    "gre_v",
-    "gre_aw",
-    "degree",
-    "llm_generated_program",
-    "llm_generated_university",
-)
+# Columns written by INSERT_SQL (every column but the SERIAL p_id), in order;
+# record_to_row() returns a dict with exactly these keys, bound by name
+# through sql.Placeholder(column).
+INSERT_COLUMNS = tuple(column for column in APPLICANT_COLUMNS if column != "p_id")
 
-INSERT_SQL = sql.SQL("INSERT INTO {table} ({columns}) VALUES ({values}) ON CONFLICT ({key}) DO NOTHING").format(
+INSERT_SQL = sql.SQL(
+    "INSERT INTO {table} ({columns}) VALUES ({values}) ON CONFLICT ({key}) DO NOTHING"
+).format(
     table=APPLICANTS,
     columns=sql.SQL(", ").join(sql.Identifier(column) for column in INSERT_COLUMNS),
     values=sql.SQL(", ").join(sql.Placeholder(column) for column in INSERT_COLUMNS),
@@ -91,7 +79,7 @@ def parse_float(value):
 
 
 def parse_date(value):
-    """Parse a Grad Cafe "Date Added" string such as "Sep 08, 2026"; None if missing or malformed."""
+    """Parse a Grad Cafe "Date Added" string like "Sep 08, 2026"; None if missing or malformed."""
     if not value:
         return None
     try:
@@ -112,17 +100,31 @@ def build_program(record):
     return university or program_name or None
 
 
+# Row columns stored as TEXT: each must be a str (or None) before it reaches psycopg2.
+TEXT_COLUMNS = (
+    "comments",
+    "url",
+    "status",
+    "term",
+    "us_or_international",
+    "degree",
+    "llm_generated_program",
+    "llm_generated_university",
+)
+
+
 def record_to_row(record):
     """Map one scraped/cleaned record (JSON keys) to an applicants-table row dict.
 
     Raises:
-        ValueError: if the record has no URL, which is the table's natural key.
+        ValueError: if the record has no URL (the table's natural key), or a
+            text field holds something other than a string.
     """
     url = record.get("URL")
     if not url:
         raise ValueError("missing URL (required as natural key)")
 
-    return {
+    row = {
         "program": build_program(record),
         "comments": record.get("Comments"),
         "date_added": parse_date(record.get("Date Added")),
@@ -138,6 +140,11 @@ def record_to_row(record):
         "llm_generated_program": record.get("llm-generated-program"),
         "llm_generated_university": record.get("llm-generated-university"),
     }
+    for column in TEXT_COLUMNS:
+        value = row[column]
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"field '{column}' must be text, got {type(value).__name__}")
+    return row
 
 
 def load_records(path):
@@ -206,9 +213,10 @@ def existing_urls(urls, database_url=None):
 def load_rows(records, conn):
     """Create the applicants table if needed and insert `records` (a list of dicts).
 
-    Each insert runs inside its own SAVEPOINT, so a database error on one
-    record rolls back only that record -- rows inserted earlier in the same
-    batch stay inserted and are counted correctly. All inserts share one
+    Each insert runs inside its own SAVEPOINT, so a row-level database error
+    (psycopg2.DataError / IntegrityError) on one record rolls back only that
+    record -- rows inserted earlier in the same batch stay inserted and are
+    counted correctly. All inserts share one
     transaction, committed only after the last record: any other exception
     raised mid-batch propagates out of `with conn:`, which rolls back the
     whole batch, so an unexpected failure never leaves partial writes. The
@@ -236,7 +244,8 @@ def load_rows(records, conn):
                 cur.execute(SAVEPOINT_SQL)
                 try:
                     cur.execute(INSERT_SQL, row)
-                except psycopg2.Error as exc:
+                except (psycopg2.DataError, psycopg2.IntegrityError) as exc:
+                    # Row-level rejection (bad value, constraint): undo just this row.
                     cur.execute(ROLLBACK_TO_SAVEPOINT_SQL)
                     failed.append((i, str(exc).strip()))
                     continue
@@ -266,8 +275,9 @@ def load_into_database(records, database_url=None):
 def main(data_file=DATA_FILE):
     """Load `data_file` into the DB_* database and print a summary.
 
-    Exits with status 1 and an actionable message if the data file is missing
-    or the database can't be reached or written to.
+    Exits with status 1 and an actionable message if the data file is missing,
+    the DB_* settings are incomplete, or the database can't be reached or
+    written to.
     """
     try:
         records = load_records(data_file)
@@ -281,6 +291,9 @@ def main(data_file=DATA_FILE):
     except psycopg2.Error as exc:
         print(DB_FAILURE_MESSAGE)
         print(f"Underlying error: {str(exc).strip().splitlines()[0]}")
+        sys.exit(1)
+    except ConfigError as exc:
+        print(f"LOAD FAILED: {exc}")
         sys.exit(1)
 
     print("Load summary:")

@@ -26,10 +26,9 @@ def _seed_known(seed):
     assert seed(records) == (5, 0, [])
 
 
-def _scraper(factory, **kwargs):
-    return functools.partial(
-        pull_data.scrape_new_entries, driver_factory=factory, start_url=PULL_PAGE_URLS[0], delay_seconds=0, **kwargs
-    )
+def _scraper(factory, target_count=pull_data.TARGET_COUNT, **settings):
+    browser = scrape.BrowserSettings(driver_factory=factory, start_url=PULL_PAGE_URLS[0], delay_seconds=0, **settings)
+    return functools.partial(pull_data.scrape_new_entries, target_count=target_count, browser=browser)
 
 
 class AlwaysCrashes:
@@ -87,7 +86,8 @@ def test_scrape_newest_stops_at_end_of_pagination(capsys):
     factory = DriverFactory(pull_pages())
 
     entries = scrape.scrape_newest(
-        lambda urls: set(), start_url=PULL_PAGE_URLS[2], delay_seconds=0, driver_factory=factory
+        lambda urls: set(),
+        scrape.BrowserSettings(start_url=PULL_PAGE_URLS[2], delay_seconds=0, driver_factory=factory),
     )
 
     assert [e["URL"] for e in entries] == [result_url(5008)]
@@ -105,7 +105,8 @@ def test_scrape_newest_skips_entries_repeated_across_pages():
     factory = DriverFactory(pages)
 
     entries = scrape.scrape_newest(
-        lambda urls: set(), start_url=PULL_PAGE_URLS[0], delay_seconds=0, driver_factory=factory
+        lambda urls: set(),
+        scrape.BrowserSettings(start_url=PULL_PAGE_URLS[0], delay_seconds=0, driver_factory=factory),
     )
 
     assert [e["URL"] for e in entries] == [result_url(rid) for rid in (5001, 5002, 5003, 5004, 5005)]
@@ -131,7 +132,9 @@ def test_crash_mid_pull_resumes_from_failed_page(seed, capsys):
         return drivers[-1]
 
     entries = pull_data.scrape_new_entries(
-        driver_factory=factory, start_url=PULL_PAGE_URLS[0], delay_seconds=0, crash_retry_wait=0
+        browser=scrape.BrowserSettings(
+            driver_factory=factory, start_url=PULL_PAGE_URLS[0], delay_seconds=0, crash_retry_wait=0
+        )
     )
 
     assert [e["URL"] for e in entries] == [result_url(5001), result_url(5002)]
@@ -145,7 +148,9 @@ def test_scrape_newest_gives_up_after_max_retries():
     factory = AlwaysCrashes()
 
     with pytest.raises(scrape.ScrapeRetriesExhausted) as excinfo:
-        scrape.scrape_newest(lambda urls: set(), driver_factory=factory, max_retries=2, crash_retry_wait=0)
+        scrape.scrape_newest(
+            lambda urls: set(), scrape.BrowserSettings(driver_factory=factory, max_retries=2, crash_retry_wait=0)
+        )
 
     assert factory.attempts == 3
     assert str(excinfo.value) == (
@@ -159,8 +164,8 @@ def test_scrape_data_gives_up_after_max_retries(tmp_path):
 
     with pytest.raises(scrape.ScrapeRetriesExhausted):
         scrape.scrape_data(
-            state_file=str(tmp_path / "state.json"), captured_dir=str(tmp_path / "pages"),
-            driver_factory=factory, max_retries=2, crash_retry_wait=0,
+            scrape.BrowserSettings(driver_factory=factory, max_retries=2, crash_retry_wait=0),
+            scrape.CaptureFiles(state_file=str(tmp_path / "state.json"), captured_dir=str(tmp_path / "pages")),
         )
 
     assert factory.attempts == 3

@@ -12,11 +12,13 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from bs4 import BeautifulSoup
-from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.webdriver import WebDriver as ChromeWebDriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -24,6 +26,111 @@ from selenium.webdriver.support.ui import WebDriverWait
 DEBUGGER_ADDRESS = "127.0.0.1:9222"
 SURVEY_URL = "https://www.thegradcafe.com/survey/"
 RESULTS_TABLE_SELECTOR = "tbody.tw-divide-y.tw-divide-gray-200.tw-bg-white"
+SITE_ROOT = "https://www.thegradcafe.com"
+
+# Every field a parsed entry record has, in order (all None until found).
+RECORD_FIELDS = (
+    "Program Name",
+    "University",
+    "Comments",
+    "Date Added",
+    "URL",
+    "Applicant Status",
+    "Acceptance Date",
+    "Rejection Date",
+    "Semester and Year",
+    "International/American",
+    "GRE Score",
+    "GRE V Score",
+    "GRE AW Score",
+    "Masters or PhD",
+    "GPA",
+    "raw_entry_text",
+)
+
+STATUS_PATTERN = re.compile(r"^(Accepted|Rejected|Wait listed|Interview)(?:\s+on\s+(.+))?$")
+# Decision status -> the record field its "on <date>" goes into.
+STATUS_DATE_FIELDS = {"Accepted": "Acceptance Date", "Rejected": "Rejection Date"}
+
+# Badge text patterns, tried in order (the first match wins): (pattern,
+# record field, regex group holding the value; 0 = the whole badge text).
+BADGE_PATTERNS = (
+    (re.compile(r"^(Fall|Spring|Summer|Winter)\s+\d{4}$"), "Semester and Year", 0),
+    (re.compile(r"^(International|American|Other)$"), "International/American", 0),
+    (re.compile(r"^GRE V\s+([\d.]+)$"), "GRE V Score", 1),
+    (re.compile(r"^GRE AW\s+([\d.]+)$"), "GRE AW Score", 1),
+    (re.compile(r"^GRE\s+(\d+)$"), "GRE Score", 1),
+    (re.compile(r"^GPA\s+([\d.]+)$"), "GPA", 1),
+)
+
+
+@dataclass(frozen=True)
+class BrowserSettings:
+    """How survey pages are fetched: where to start, pacing, and crash handling.
+
+    Attributes:
+        start_url: The survey URL to start from (when there is no saved
+            capture state to resume from).
+        delay_seconds: Seconds to sleep between page loads, to avoid
+            hammering the site.
+        wait_timeout: Seconds to wait for each page's results table before
+            using the page anyway.
+        driver_factory: Zero-argument callable returning a Selenium
+            WebDriver-like object (needs .get() and .page_source). None
+            means attach_to_chrome(); tests pass a fake that serves saved HTML.
+        max_retries: Consecutive browser-crash retries allowed before
+            ScrapeRetriesExhausted is raised.
+        crash_retry_wait: Seconds to wait before re-attaching after a crash.
+    """
+
+    start_url: str = SURVEY_URL
+    delay_seconds: float = 2.5
+    wait_timeout: float = 15
+    driver_factory: Callable | None = None
+    max_retries: int = 3
+    crash_retry_wait: float = 5
+
+    def new_driver(self):
+        """Attach a fresh browser session (driver_factory, default attach_to_chrome)."""
+        return (self.driver_factory or attach_to_chrome)()
+
+
+@dataclass(frozen=True)
+class CaptureFiles:
+    """Where capture_pages() keeps its resumability state and the raw page HTML.
+
+    Attributes:
+        state_file: JSON file holding {"next_url": ..., "pages_captured": ...}.
+        captured_dir: Directory the raw pages are saved into, as
+            page_00001.html, page_00002.html, etc.
+    """
+
+    state_file: str = "_scrape_state.json"
+    captured_dir: str = "_captured_pages"
+
+    def resume_point(self, start_url):
+        """(next_url, pages_captured) from state_file, or (start_url, 0) for a fresh capture."""
+        if not os.path.exists(self.state_file):
+            return start_url, 0
+        with open(self.state_file, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        return state["next_url"], state["pages_captured"]
+
+    def save_page(self, pages_captured, page_source, next_url):
+        """Write one captured page's HTML and the updated resumability state."""
+        page_path = os.path.join(self.captured_dir, f"page_{pages_captured:05d}.html")
+        with open(page_path, "w", encoding="utf-8") as f:
+            f.write(page_source)
+        with open(self.state_file, "w", encoding="utf-8") as f:
+            json.dump({"next_url": next_url, "pages_captured": pages_captured}, f)
+
+
+@dataclass
+class _BrowserSession:
+    """The current driver (None until attached) and the consecutive-crash count."""
+
+    driver: object = None
+    crashes: int = 0
 
 
 class ScrapeRetriesExhausted(RuntimeError):
@@ -58,118 +165,117 @@ def attach_to_chrome():
     """
     options = Options()
     options.add_experimental_option("debuggerAddress", DEBUGGER_ADDRESS)
-    return webdriver.Chrome(options=options)
+    return ChromeWebDriver(options=options)
 
 
-def capture_pages(
-    start_url=SURVEY_URL,
-    target_pages=None,
-    delay_seconds=2.5,
-    state_file="_scrape_state.json",
-    captured_dir="_captured_pages",
-    driver_factory=None,
-    wait_timeout=15,
-):
+def _load_page(driver, url, wait_timeout):
+    """Open url in driver, wait for its results table, and return the page HTML."""
+    driver.get(url)
+    _wait_for_results_table(driver, url, wait_timeout)
+    return driver.page_source
+
+
+def _load_with_retries(session, url, browser):
+    """Return url's HTML, re-attaching after a browser crash (WebDriverException).
+
+    Crashes are counted per session and reset after every successful page;
+    more than browser.max_retries in a row raises ScrapeRetriesExhausted.
+    """
+    while True:
+        try:
+            if session.driver is None:
+                session.driver = browser.new_driver()
+            html = _load_page(session.driver, url, browser.wait_timeout)
+        except WebDriverException as exc:
+            session.crashes += 1
+            if session.crashes > browser.max_retries:
+                raise _retries_exhausted(session.crashes, exc) from exc
+            print(f"Browser session crashed loading {url}: {exc}")
+            print(
+                "Retrying the same page with a fresh browser attach "
+                f"({session.crashes}/{browser.max_retries})."
+            )
+            session.driver = None
+            time.sleep(browser.crash_retry_wait)
+            continue
+        session.crashes = 0
+        return html
+
+
+def _capture_stop_reason(next_url, current_url, pages_captured, target_pages):
+    """Why capturing should stop after this page, or None to keep going."""
+    if next_url is None:
+        return "no next-page link found"
+    if next_url == current_url:
+        return "next_url did not advance from the current page"
+    if target_pages is not None and pages_captured >= target_pages:
+        return "reached target_pages"
+    return None
+
+
+def capture_pages(browser=None, files=None, target_pages=None):
     """
     Capture raw HTML for Grad Cafe survey result pages, without parsing them.
 
     Page capture is kept separate from parsing so that a bug in the
     parsing logic (_group_entry_rows/_parse_entry/etc.) never requires
     re-scraping the live site to fix — the raw HTML for every page
-    visited is saved to captured_dir, and parse_captured_pages() can be
-    re-run against those saved files as many times as needed after a fix,
-    independent of any live browser session.
+    visited is saved to files.captured_dir, and parse_captured_pages() can
+    be re-run against those saved files as many times as needed after a
+    fix, independent of any live browser session.
 
     Resumability:
         Like the original combined scrape, a capture run can be
-        interrupted partway through. Progress is persisted to state_file
-        after every page as {"next_url": ..., "pages_captured": ...}. On
-        startup, if state_file exists, capturing resumes from its
-        "next_url" (continuing the running "pages_captured" count used
-        for output filenames) instead of starting over from start_url. If
-        the previously saved state already recorded next_url as None
-        (meaning a prior run reached the last page), this call captures
-        nothing and returns 0 immediately.
+        interrupted partway through. Progress is persisted to
+        files.state_file after every page as {"next_url": ...,
+        "pages_captured": ...}. On startup, if state_file exists,
+        capturing resumes from its "next_url" (continuing the running
+        "pages_captured" count used for output filenames) instead of
+        starting over from browser.start_url. If the previously saved
+        state already recorded next_url as None (meaning a prior run
+        reached the last page), this call captures nothing and returns 0
+        immediately.
 
     Args:
-        start_url: The survey URL to start from when there is no prior
-            saved state to resume from.
+        browser: BrowserSettings (start_url, delay_seconds, wait_timeout,
+            driver_factory); default BrowserSettings().
+        files: CaptureFiles (state_file, captured_dir); default CaptureFiles().
         target_pages: If not None, stop once pages_captured reaches this
             count (a cumulative count that persists across resumed
             calls, not necessarily the number of pages captured in this
             particular call).
-        delay_seconds: Seconds to sleep between page loads, to avoid
-            hammering the site.
-        state_file: Path to the JSON file used to persist resumability
-            state (next_url, pages_captured).
-        captured_dir: Directory to save each captured page's raw HTML
-            into, as page_00001.html, page_00002.html, etc.
-        driver_factory: Zero-argument callable returning a Selenium
-            WebDriver-like object (needs .get() and .page_source). Defaults
-            to attach_to_chrome(); tests pass a fake that serves saved HTML.
-        wait_timeout: Seconds to wait for each page's results table before
-            saving the page anyway.
 
     Returns:
         int: The number of new pages captured during this call (not the
             cumulative total across all resumed runs).
     """
-    os.makedirs(captured_dir, exist_ok=True)
+    browser = browser or BrowserSettings()
+    files = files or CaptureFiles()
+    os.makedirs(files.captured_dir, exist_ok=True)
 
-    if os.path.exists(state_file):
-        with open(state_file, "r", encoding="utf-8") as f:
-            state = json.load(f)
-        next_url = state["next_url"]
-        pages_captured = state["pages_captured"]
-    else:
-        next_url = start_url
-        pages_captured = 0
-
+    next_url, pages_captured = files.resume_point(browser.start_url)
     pages_captured_this_run = 0
-    stop_reason = None
 
     if next_url is None:
         stop_reason = "no next-page link found (already at the last page)"
     else:
-        driver = (driver_factory or attach_to_chrome)()
-
+        driver = browser.new_driver()
         current_url = next_url
-        driver.get(current_url)
-        _wait_for_results_table(driver, current_url, wait_timeout)
+        page_source = _load_page(driver, current_url, browser.wait_timeout)
 
         while True:
-            page_source = driver.page_source
-            soup = BeautifulSoup(page_source, "html.parser")
-
             pages_captured += 1
             pages_captured_this_run += 1
-            page_path = os.path.join(
-                captured_dir, f"page_{pages_captured:05d}.html"
-            )
-            with open(page_path, "w", encoding="utf-8") as f:
-                f.write(page_source)
+            next_url = _extract_next_url(BeautifulSoup(page_source, "html.parser"))
+            files.save_page(pages_captured, page_source, next_url)
 
-            next_url = _extract_next_url(soup)
-
-            with open(state_file, "w", encoding="utf-8") as f:
-                json.dump(
-                    {"next_url": next_url, "pages_captured": pages_captured}, f
-                )
-
-            if next_url is None:
-                stop_reason = "no next-page link found"
-                break
-            if next_url == current_url:
-                stop_reason = "next_url did not advance from the current page"
-                break
-            if target_pages is not None and pages_captured >= target_pages:
-                stop_reason = "reached target_pages"
+            stop_reason = _capture_stop_reason(next_url, current_url, pages_captured, target_pages)
+            if stop_reason is not None:
                 break
 
-            time.sleep(delay_seconds)
+            time.sleep(browser.delay_seconds)
             current_url = next_url
-            driver.get(current_url)
-            _wait_for_results_table(driver, current_url, wait_timeout)
+            page_source = _load_page(driver, current_url, browser.wait_timeout)
 
     print(f"Pages captured this run: {pages_captured_this_run}")
     print(f"Stopped because: {stop_reason}")
@@ -219,111 +325,91 @@ def parse_page(html):
     return _filter_valid_entries(parsed_entries)
 
 
-def scrape_newest(
-    is_known,
-    start_url=SURVEY_URL,
-    target_count=300,
-    delay_seconds=2.5,
-    driver_factory=None,
-    max_retries=3,
-    crash_retry_wait=5,
-    wait_timeout=15,
-):
+def _fresh_entries(html, is_known, seen_urls):
+    """Entries on a page whose URL is neither in the database nor already collected.
+
+    Entries without a URL are dropped (they can't be loaded). The returned
+    URLs are added to seen_urls.
+    """
+    entries = [e for e in parse_page(html) if e["URL"]]
+    known = is_known([e["URL"] for e in entries])
+    fresh = [e for e in entries if e["URL"] not in known and e["URL"] not in seen_urls]
+    seen_urls.update(e["URL"] for e in fresh)
+    return fresh
+
+
+def _newest_stop_reason(found_new, collected, target_count, url, next_url):
+    """Why a Pull Data scrape should stop after this page, or None to keep going."""
+    if not found_new:
+        return "a page had no new entries"
+    if collected >= target_count:
+        return f"collected at least {target_count} new entries"
+    if next_url is None or next_url == url:
+        return "reached the end of pagination"
+    return None
+
+
+def scrape_newest(is_known, browser=None, target_count=300):
     """
     Collect entries newer than what the database already has, newest first.
 
-    Used by Pull Data. Every call starts at start_url (the first, newest
-    results page) -- there is no resume state across pulls -- and walks
-    forward through pagination, keeping entries whose URL is_known() does
-    not report. It stops after the first page that yields no new entries
-    (everything older is already loaded), once at least target_count new
-    entries are collected, or when pagination ends. Pages are parsed in
-    memory; nothing is written to disk.
+    Used by Pull Data. Every call starts at browser.start_url (the first,
+    newest results page) -- there is no resume state across pulls -- and
+    walks forward through pagination, keeping entries whose URL is_known()
+    does not report. It stops after the first page that yields no new
+    entries (everything older is already loaded), once at least
+    target_count new entries are collected, or when pagination ends. Pages
+    are parsed in memory; nothing is written to disk.
 
     Within a single call, a browser crash (WebDriverException) re-attaches
     and retries the page that failed, keeping everything collected so far.
-    After max_retries consecutive failed retries it raises
+    After browser.max_retries consecutive failed retries it raises
     ScrapeRetriesExhausted.
 
     Args:
         is_known: Callable taking a list of URLs and returning the set of
             those already in the database.
-        start_url: The first (newest) results page.
+        browser: BrowserSettings (start_url, delay_seconds, driver_factory,
+            max_retries, crash_retry_wait, wait_timeout); default
+            BrowserSettings().
         target_count: Stop fetching further pages once at least this many
             new entries have been collected.
-        delay_seconds: Seconds to sleep between page loads.
-        driver_factory: Zero-argument callable returning a WebDriver-like
-            object (default: attach_to_chrome).
-        max_retries: Consecutive crash retries allowed before giving up.
-        crash_retry_wait: Seconds to wait before re-attaching after a crash.
-        wait_timeout: Seconds to wait for each page's results table.
 
     Returns:
         list: New entry records (entries without a URL are dropped, since
             they can't be loaded).
     """
+    browser = browser or BrowserSettings()
+    session = _BrowserSession()
     new_entries = []
     seen_urls = set()
-    url = start_url
-    driver = None
-    crashes = 0
+    url = browser.start_url
     pages_read = 0
 
     while True:
-        try:
-            if driver is None:
-                driver = (driver_factory or attach_to_chrome)()
-            driver.get(url)
-            _wait_for_results_table(driver, url, wait_timeout)
-            html = driver.page_source
-        except WebDriverException as exc:
-            crashes += 1
-            if crashes > max_retries:
-                raise _retries_exhausted(crashes, exc) from exc
-            print(f"Browser session crashed loading {url}: {exc}")
-            print(f"Retrying the same page with a fresh browser attach ({crashes}/{max_retries}).")
-            driver = None
-            time.sleep(crash_retry_wait)
-            continue
-
-        crashes = 0
+        html = _load_with_retries(session, url, browser)
         pages_read += 1
-        entries = [e for e in parse_page(html) if e["URL"]]
-        known = is_known([e["URL"] for e in entries])
-        fresh = [e for e in entries if e["URL"] not in known and e["URL"] not in seen_urls]
-        seen_urls.update(e["URL"] for e in fresh)
+        fresh = _fresh_entries(html, is_known, seen_urls)
         new_entries.extend(fresh)
 
         next_url = _extract_next_url(BeautifulSoup(html, "html.parser"))
-        if not fresh:
-            stop_reason = "a page had no new entries"
-            break
-        if len(new_entries) >= target_count:
-            stop_reason = f"collected at least {target_count} new entries"
-            break
-        if next_url is None or next_url == url:
-            stop_reason = "reached the end of pagination"
+        stop_reason = _newest_stop_reason(
+            bool(fresh), len(new_entries), target_count, url, next_url
+        )
+        if stop_reason is not None:
             break
 
-        time.sleep(delay_seconds)
+        time.sleep(browser.delay_seconds)
         url = next_url
 
-    print(f"Pages read: {pages_read}; new entries: {len(new_entries)}; stopped because {stop_reason}.")
+    print(
+        f"Pages read: {pages_read}; new entries: {len(new_entries)}; "
+        f"stopped because {stop_reason}."
+    )
     return new_entries
 
 
-def scrape_data(
-    target_count=60000,
-    start_url=SURVEY_URL,
-    delay_seconds=2.5,
-    state_file="_scrape_state.json",
-    captured_dir="_captured_pages",
-    batch_size=150,
-    crash_retry_wait=5,
-    driver_factory=None,
-    wait_timeout=15,
-    max_retries=3,
-):
+def scrape_data(browser=None, files=None, target_count=60000, batch_size=150):
     """
     Scrape Grad Cafe survey results end-to-end, until target_count entries
     have been collected.
@@ -346,8 +432,8 @@ def scrape_data(
     (via its own debuggerAddress attach logic) and resumes from
     state_file's last saved position. This makes multi-hour scrapes safe
     to kick off and leave unattended. A batch that keeps crashing is retried
-    at most max_retries times in a row; after that ScrapeRetriesExhausted
-    is raised instead of looping forever.
+    at most browser.max_retries times in a row; after that
+    ScrapeRetriesExhausted is raised instead of looping forever.
 
     capture_pages() and parse_captured_pages() are also fully usable on
     their own: e.g. parse_captured_pages() can be re-run by itself,
@@ -355,48 +441,28 @@ def scrape_data(
     entries from HTML that was already captured in an earlier run.
 
     Args:
+        browser: BrowserSettings, passed through to capture_pages(); its
+            crash_retry_wait and max_retries also govern batch retries.
+        files: CaptureFiles (state_file, captured_dir); default CaptureFiles().
         target_count: Stop once at least this many parsed entries exist
             across all captured pages.
-        start_url: The survey URL to start from when there is no prior
-            saved state to resume from.
-        delay_seconds: Seconds to sleep between page loads, to avoid
-            hammering the site.
-        state_file: Path to the JSON file used to persist capture
-            resumability state.
-        captured_dir: Directory holding captured page_*.html files.
         batch_size: Number of new pages to request per capture_pages()
             call.
-        crash_retry_wait: Seconds to wait before retrying after a
-            capture_pages() call crashes mid-batch.
-        driver_factory: Passed through to capture_pages() (default:
-            attach_to_chrome).
-        wait_timeout: Passed through to capture_pages().
-        max_retries: Consecutive crash retries allowed before giving up.
 
     Returns:
         list: The full flat list of parsed applicant entry records.
     """
+    browser = browser or BrowserSettings()
+    files = files or CaptureFiles()
     crashes = 0
     while True:
-        if os.path.exists(state_file):
-            with open(state_file, "r", encoding="utf-8") as f:
-                current_pages_captured = json.load(f)["pages_captured"]
-        else:
-            current_pages_captured = 0
+        current_pages_captured = files.resume_point(None)[1]
 
         try:
-            capture_pages(
-                start_url=start_url,
-                target_pages=current_pages_captured + batch_size,
-                delay_seconds=delay_seconds,
-                state_file=state_file,
-                captured_dir=captured_dir,
-                driver_factory=driver_factory,
-                wait_timeout=wait_timeout,
-            )
+            capture_pages(browser, files, target_pages=current_pages_captured + batch_size)
         except WebDriverException as exc:
             crashes += 1
-            if crashes > max_retries:
+            if crashes > browser.max_retries:
                 raise _retries_exhausted(crashes, exc) from exc
             print(
                 f"Browser session crashed during batch starting at page "
@@ -407,13 +473,13 @@ def scrape_data(
                 "State was preserved up to the last successfully captured "
                 "page; retrying with a fresh browser attach."
             )
-            time.sleep(crash_retry_wait)
+            time.sleep(browser.crash_retry_wait)
             continue
 
         crashes = 0
-        entries = parse_captured_pages(captured_dir=captured_dir)
+        entries = parse_captured_pages(captured_dir=files.captured_dir)
 
-        with open(state_file, "r", encoding="utf-8") as f:
+        with open(files.state_file, "r", encoding="utf-8") as f:
             state = json.load(f)
 
         print(
@@ -429,7 +495,7 @@ def scrape_data(
             print(f"Target of {target_count} entries reached.")
             break
 
-    return parse_captured_pages(captured_dir=captured_dir)
+    return parse_captured_pages(captured_dir=files.captured_dir)
 
 
 def _extract_next_url(soup):
@@ -481,40 +547,8 @@ def _group_entry_rows(tbody_rows):
     return entries
 
 
-def _parse_entry(entry_rows):
-    """
-    Parse a single grouped Grad Cafe result entry into a structured record.
-
-    Args:
-        entry_rows: A list of BeautifulSoup <tr> tags for one applicant
-            entry, as produced by _group_entry_rows().
-
-    Returns:
-        dict: A structured record containing the fields extracted from
-            the entry.
-    """
-    record = {
-        "Program Name": None,
-        "University": None,
-        "Comments": None,
-        "Date Added": None,
-        "URL": None,
-        "Applicant Status": None,
-        "Acceptance Date": None,
-        "Rejection Date": None,
-        "Semester and Year": None,
-        "International/American": None,
-        "GRE Score": None,
-        "GRE V Score": None,
-        "GRE AW Score": None,
-        "Masters or PhD": None,
-        "GPA": None,
-        "raw_entry_text": None,
-    }
-
-    main_row = entry_rows[0]
-    cells = main_row.find_all("td")
-
+def _parse_main_row(cells, record):
+    """Fill University, program, degree, Date Added, status and URL from the main row."""
     if len(cells) > 0:
         div = cells[0].find("div")
         if div is not None:
@@ -530,62 +564,60 @@ def _parse_entry(entry_rows):
         record["Date Added"] = cells[2].get_text(strip=True)
 
     if len(cells) > 3:
-        status_text = cells[3].get_text(strip=True)
-        match = re.match(
-            r'^(Accepted|Rejected|Wait listed|Interview)(?:\s+on\s+(.+))?$',
-            status_text,
-        )
-        if match:
-            status, date = match.group(1), match.group(2)
-            record["Applicant Status"] = status
-            if status == "Accepted":
-                record["Acceptance Date"] = date
-            elif status == "Rejected":
-                record["Rejection Date"] = date
+        _parse_status(cells[3].get_text(strip=True), record)
 
     if len(cells) > 4:
-        link = cells[4].find("a")
-        if link is not None:
-            href = link.get("href")
-            if href:
-                if href.startswith("/"):
-                    record["URL"] = "https://www.thegradcafe.com" + href
-                else:
-                    record["URL"] = href
+        record["URL"] = _entry_url(cells[4])
+
+
+def _parse_status(status_text, record):
+    """Fill Applicant Status (and its Acceptance/Rejection Date) from e.g. "Accepted on 8 Sep"."""
+    match = STATUS_PATTERN.match(status_text)
+    if match:
+        status, date = match.group(1), match.group(2)
+        record["Applicant Status"] = status
+        if status in STATUS_DATE_FIELDS:
+            record[STATUS_DATE_FIELDS[status]] = date
+
+
+def _entry_url(cell):
+    """The entry's absolute result URL from its link cell, or None if there is no link."""
+    link = cell.find("a")
+    href = link.get("href") if link is not None else None
+    if not href:
+        return None
+    return SITE_ROOT + href if href.startswith("/") else href
+
+
+def _parse_badges(badge_row, record):
+    """Fill term, nationality, GRE and GPA from the badge row (first matching pattern wins)."""
+    for badge in badge_row.find_all("div"):
+        text = badge.get_text(strip=True)
+        for pattern, field, group in BADGE_PATTERNS:
+            match = pattern.match(text)
+            if match:
+                record[field] = match.group(group)
+                break
+
+
+def _parse_entry(entry_rows):
+    """
+    Parse a single grouped Grad Cafe result entry into a structured record.
+
+    Args:
+        entry_rows: A list of BeautifulSoup <tr> tags for one applicant
+            entry, as produced by _group_entry_rows().
+
+    Returns:
+        dict: A structured record containing the fields extracted from
+            the entry (every RECORD_FIELDS key; None where not found).
+    """
+    record = dict.fromkeys(RECORD_FIELDS)
+
+    _parse_main_row(entry_rows[0].find_all("td"), record)
 
     if len(entry_rows) > 1:
-        for badge in entry_rows[1].find_all("div"):
-            text = badge.get_text(strip=True)
-
-            m = re.match(r'^(Fall|Spring|Summer|Winter)\s+\d{4}$', text)
-            if m:
-                record["Semester and Year"] = text
-                continue
-
-            m = re.match(r'^(International|American|Other)$', text)
-            if m:
-                record["International/American"] = text
-                continue
-
-            m = re.match(r'^GRE V\s+([\d.]+)$', text)
-            if m:
-                record["GRE V Score"] = m.group(1)
-                continue
-
-            m = re.match(r'^GRE AW\s+([\d.]+)$', text)
-            if m:
-                record["GRE AW Score"] = m.group(1)
-                continue
-
-            m = re.match(r'^GRE\s+(\d+)$', text)
-            if m:
-                record["GRE Score"] = m.group(1)
-                continue
-
-            m = re.match(r'^GPA\s+([\d.]+)$', text)
-            if m:
-                record["GPA"] = m.group(1)
-                continue
+        _parse_badges(entry_rows[1], record)
 
     if len(entry_rows) > 2:
         paragraph = entry_rows[2].find("p")

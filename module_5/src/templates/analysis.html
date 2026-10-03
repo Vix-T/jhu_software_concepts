@@ -40,6 +40,9 @@
   </header>
 
   <main>
+    {% if db_unavailable %}
+    <p class="db-unavailable" data-testid="db-unavailable">Database unavailable: the analysis could not be loaded. Check that PostgreSQL is running and the DB_* settings are correct, then reload this page.</p>
+    {% else %}
     <section class="question">
       <h2>Q1</h2>
       <p class="prompt">How many entries are from applicants who applied for Fall 2026?</p>
@@ -125,6 +128,7 @@
         </tbody>
       </table>
     </section>
+    {% endif %}
   </main>
 
   <script>

@@ -31,16 +31,21 @@ an explanatory message instead of hanging.
 """
 
 import json
+import logging
 import os
 import socket
 import sys
 import tempfile
 from datetime import datetime, timezone
 
+import psycopg2
 from selenium.common.exceptions import WebDriverException
 
 import load_data
-from scrape import scrape_newest
+from config import ConfigError
+from scrape import BrowserSettings, ScrapeRetriesExhausted, scrape_newest
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(__file__)
 PULL_RESULT_FILE = os.path.join(BASE_DIR, "_pull_data_result.json")
@@ -63,6 +68,14 @@ CLOUDFLARE_PRECONDITION_MESSAGE = (
     "does not launch or solve anything itself. Start that session first, "
     "then click Pull Data again."
 )
+
+
+# Recorded when a launched pull process ends without writing its own result.
+CRASHED_PULL_ERROR = "pull process exited without reporting a result"
+
+# Failures main() records and reports (exit 1); anything else is a bug and
+# propagates with its traceback.
+RECORDED_FAILURES = (ScrapeRetriesExhausted, psycopg2.Error, OSError, ConfigError)
 
 
 class PullPreconditionError(RuntimeError):
@@ -90,30 +103,26 @@ def _debugger_port_open(host=DEBUGGER_HOST, port=DEBUGGER_PORT):
 
 def scrape_new_entries(
     target_count=TARGET_COUNT,
-    driver_factory=None,
+    browser=None,
     port_check=_debugger_port_open,
     is_known=None,
-    **scrape_kwargs,
 ):
     """Scrape the newest Grad Cafe entries not yet in the database.
 
-    With the default driver_factory (attach to the real Chrome session), the
-    debugger port is checked first (port_check, default _debugger_port_open)
-    and PullPreconditionError is raised if nothing is listening. A
-    caller-supplied driver_factory skips that check, since it doesn't attach
-    to Chrome. is_known(urls) -> set defaults to a lookup in the DB_* database.
-    Extra keyword arguments (e.g. start_url, delay_seconds, max_retries) are
-    passed through to scrape.scrape_newest().
+    browser is a scrape.BrowserSettings (start_url, delay_seconds,
+    driver_factory, max_retries, ...), passed through to
+    scrape.scrape_newest(). With the default driver_factory (attach to the
+    real Chrome session), the debugger port is checked first (port_check,
+    default _debugger_port_open) and PullPreconditionError is raised if
+    nothing is listening. A caller-supplied driver_factory skips that check,
+    since it doesn't attach to Chrome. is_known(urls) -> set defaults to a
+    lookup in the DB_* database.
     """
-    if driver_factory is None and not port_check():
+    browser = browser or BrowserSettings()
+    if browser.driver_factory is None and not port_check():
         raise PullPreconditionError(CLOUDFLARE_PRECONDITION_MESSAGE)
 
-    return scrape_newest(
-        is_known or load_data.existing_urls,
-        target_count=target_count,
-        driver_factory=driver_factory,
-        **scrape_kwargs,
-    )
+    return scrape_newest(is_known or load_data.existing_urls, browser, target_count=target_count)
 
 
 def run_pull(scraper, loader):
@@ -164,14 +173,50 @@ def write_pull_result(path, result):
     os.replace(tmp_path, path)
 
 
+def pending_result():
+    """Result record written before a pull subprocess starts.
+
+    It is already a failure record: the child replaces it with its real
+    outcome when it finishes, so if it is still pending once the child is
+    gone, the pull ended without reporting anything.
+    """
+    result = pull_result(error=CRASHED_PULL_ERROR)
+    result["pending"] = True
+    return result
+
+
 def read_pull_result(path):
-    """Return the last pull's result dict, or None if no (readable) result exists yet."""
+    """Return the last pull's result dict, or None if no (readable) result exists yet.
+
+    A missing, unreadable (permissions, a directory) or undecodable file is
+    logged and treated as "no result", so it can never break the page.
+    """
     try:
         with open(path, "r", encoding="utf-8") as f:
             result = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+    except (OSError, ValueError) as exc:  # ValueError covers JSON and UTF-8 decode errors
+        logger.debug("No readable pull result at %s: %s", path, exc)
         return None
     return result if isinstance(result, dict) else None
+
+
+def settle_pull_result(path, running):
+    """Return the last pull's result, resolving a pending record.
+
+    While the pull is still running its pending record isn't a result yet
+    (None). Once it isn't running, a record that is still pending means the
+    process ended without writing its outcome: it is rewritten as a failure,
+    timestamped now.
+    """
+    result = read_pull_result(path)
+    if result is None or not result.get("pending"):
+        return result
+    if running:
+        return None
+    settled = pull_result(error=CRASHED_PULL_ERROR)
+    write_pull_result(path, settled)
+    logger.warning("Pull process ended without a result; recorded as failed in %s", path)
+    return settled
 
 
 def _fail(result_path, error, lines):
@@ -202,7 +247,7 @@ def main(scraper=None, loader=None, result_path=None):
             f"could not attach to Chrome: {exc}".strip(),
             [CLOUDFLARE_PRECONDITION_MESSAGE, f"Underlying error: {exc}"],
         )
-    except Exception as exc:  # retries exhausted, database errors, anything else: record it
+    except RECORDED_FAILURES as exc:  # retries exhausted, database, file/socket, or DB_* settings
         message = f"{type(exc).__name__}: {exc}"
         _fail(result_path, message, [f"PULL FAILED: {message}"])
 

@@ -5,8 +5,9 @@ from bs4 import BeautifulSoup
 from conftest import FakeScraper
 
 import pull_data
-from flask_app import create_app
+from flask_app import AppDependencies, create_app
 from busy_state import InMemoryBusyState
+from scrape import ScrapeRetriesExhausted
 
 pytestmark = pytest.mark.buttons
 
@@ -38,7 +39,7 @@ def test_after_successful_pull(client, fake_records):
 
 
 def test_after_failed_pull(make_app, loader_spy):
-    client = make_app(scraper=FakeScraper(raises=RuntimeError("Chrome session lost")), loader=loader_spy).test_client()
+    client = make_app(scraper=FakeScraper(raises=ScrapeRetriesExhausted("Chrome session lost")), loader=loader_spy).test_client()
     assert client.post("/pull-data").status_code == 500
 
     last = client.get("/pull-status").get_json()["last_result"]
@@ -64,8 +65,7 @@ def test_configured_result_path(test_database_url, tmp_path, fake_records, pull_
     configured = tmp_path / "configured.json"
     client = create_app(
         {"DB_URL": test_database_url, "TESTING": True, "PULL_RESULT_PATH": str(configured)},
-        scraper=FakeScraper(fake_records),
-        busy_state=InMemoryBusyState(),
+        AppDependencies(scraper=FakeScraper(fake_records), busy_state=InMemoryBusyState()),
     ).test_client()
 
     assert client.post("/pull-data").status_code == 200

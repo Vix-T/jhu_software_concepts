@@ -39,10 +39,13 @@ no PIDs checked.
 
 import fcntl
 import json
+import logging
 import os
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 
 def _now_iso():
@@ -86,10 +89,13 @@ class FileLockBusyState:
                 fcntl.flock(guard, fcntl.LOCK_UN)
 
     def _clear(self):
+        """Remove the lock file. Returns True if removed, False if it was already gone."""
         try:
             os.remove(self.lock_path)
         except FileNotFoundError:
-            pass
+            logger.debug("Lock already removed: %s", self.lock_path)
+            return False
+        return True
 
     def status(self):
         """Return the lock's contents if its holder is alive; clear it if stale.
@@ -112,10 +118,15 @@ class FileLockBusyState:
         try:
             with open(self.lock_path, "r", encoding="utf-8") as f:
                 info = json.load(f)
-            pid = info.get("pid")
-        except (json.JSONDecodeError, OSError, AttributeError):
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+            logger.warning("Cleared unreadable lock file %s: %s", self.lock_path, exc)
             self._clear()
             return {"running": False}
+        if not isinstance(info, dict):
+            logger.warning("Cleared malformed lock file %s (not a JSON object)", self.lock_path)
+            self._clear()
+            return {"running": False}
+        pid = info.get("pid")
 
         if pid is not None and _pid_alive(pid):
             return {"running": True, **info}
@@ -141,7 +152,8 @@ class FileLockBusyState:
                 return False
 
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"pid": pid if pid is not None else os.getpid(), "started_at": _now_iso()}, f)
+                holder = pid if pid is not None else os.getpid()
+                json.dump({"pid": holder, "started_at": _now_iso()}, f)
             return True
 
     def set_owner(self, pid):
