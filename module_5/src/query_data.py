@@ -2,7 +2,7 @@
 
 import psycopg2
 
-from config import get_database_url
+from config import psycopg2_dsn
 
 # Word-boundary (\y) regex patterns, matched case-insensitively (~*).
 # See conversation history / query_results write-up for the false-positive
@@ -262,8 +262,8 @@ def custom2(cur):
 
 
 def main():
-    """CLI: run every analysis question with raw SQL against DATABASE_URL and print the answers."""
-    conn = psycopg2.connect(get_database_url())
+    """CLI: run every analysis question with raw SQL against the DB_* database and print the answers."""
+    conn = psycopg2.connect(psycopg2_dsn())
 
     try:
         with conn.cursor() as cur:

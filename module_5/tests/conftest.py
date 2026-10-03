@@ -6,10 +6,11 @@ guards enforce that:
 
 - pytest refuses to start (pytest.UsageError) unless TEST_DATABASE_URL is
   set and its database name ends in "_test".
-- For the whole run, DATABASE_URL is overridden with the test URL, so any
-  code path that falls back to config.get_database_url() also lands on the
-  test database (python-dotenv never overrides a variable already set in
-  the environment). The original value is restored when the run ends.
+- For the whole run, DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD are
+  overridden with the parts of the test URL, so any code path that falls
+  back to config.get_db_url() also lands on the test database (python-dotenv
+  never overrides a variable already set in the environment). The original
+  values are restored when the run ends.
 
 The applicants table is created once per session with the application's
 own CREATE_TABLE_SQL and truncated before every test, so each test starts
@@ -26,6 +27,7 @@ from selenium.common.exceptions import NoSuchElementException
 from sqlalchemy.engine import make_url
 
 import load_data
+from config import db_env
 from flask_app import create_app
 from busy_state import InMemoryBusyState
 
@@ -33,7 +35,7 @@ ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 
 _UNSET = object()
-_saved_database_url = _UNSET
+_saved_db_env = {}
 
 
 def _read_test_database_url():
@@ -53,18 +55,20 @@ def _read_test_database_url():
 
 
 def pytest_configure(config):
-    global _saved_database_url
     test_url = _read_test_database_url()
     config.test_database_url = test_url
-    _saved_database_url = os.environ.get("DATABASE_URL", _UNSET)
-    os.environ["DATABASE_URL"] = test_url
+    test_env = db_env(test_url)
+    for name in test_env:
+        _saved_db_env[name] = os.environ.get(name, _UNSET)
+    os.environ.update(test_env)
 
 
 def pytest_unconfigure(config):
-    if _saved_database_url is _UNSET:
-        os.environ.pop("DATABASE_URL", None)
-    else:
-        os.environ["DATABASE_URL"] = _saved_database_url
+    for name, value in _saved_db_env.items():
+        if value is _UNSET:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +324,7 @@ def make_app(test_database_url, busy_state, _applicants_table):
 
     def build(**overrides):
         overrides.setdefault("busy_state", busy_state)
-        return create_app(config={"DATABASE_URL": test_database_url, "TESTING": True}, **overrides)
+        return create_app(config={"DB_URL": test_database_url, "TESTING": True}, **overrides)
 
     return build
 

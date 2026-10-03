@@ -7,8 +7,8 @@ in load_data.py; this module only defines the mapping and connection
 for querying via the ORM.
 
 No engine is created at import time: callers build a session factory with
-make_session_factory(), which reads DATABASE_URL via config.py unless a
-URL is passed in explicitly (e.g. by the Flask app factory or by tests).
+make_session_factory(), which reads the DB_* settings via config.py unless
+a URL is passed in explicitly (e.g. by the Flask app factory or by tests).
 """
 
 from datetime import date
@@ -16,12 +16,12 @@ from datetime import date
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-from config import get_database_url
+from config import get_db_url
 
 
 def make_session_factory(database_url=None):
-    """Return a sessionmaker bound to database_url (default: DATABASE_URL)."""
-    engine = create_engine(database_url or get_database_url())
+    """Return a sessionmaker bound to database_url (default: the DB_* settings)."""
+    engine = create_engine(database_url or get_db_url())
     return sessionmaker(bind=engine)
 
 

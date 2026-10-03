@@ -1,6 +1,6 @@
 """load_data.py: parsing helpers, load_rows, and the CLI (JSON file -> test database).
 
-Uses the test database only: conftest points DATABASE_URL at
+Uses the test database only: conftest points the DB_* settings at
 TEST_DATABASE_URL for the whole run, which is what load_data.main()
 connects to.
 """
@@ -137,7 +137,9 @@ def test_main_exits_when_database_unreachable(tmp_path, monkeypatch, capsys, row
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
         closed_port = probe.getsockname()[1]
-    monkeypatch.setenv("DATABASE_URL", f"postgresql://127.0.0.1:{closed_port}/unreachable_test")
+    monkeypatch.setenv("DB_HOST", "127.0.0.1")
+    monkeypatch.setenv("DB_PORT", str(closed_port))
+    monkeypatch.setenv("DB_NAME", "unreachable_test")
     path = _write(tmp_path, [make_record(0)])
 
     with pytest.raises(SystemExit) as excinfo:
@@ -146,7 +148,7 @@ def test_main_exits_when_database_unreachable(tmp_path, monkeypatch, capsys, row
     assert excinfo.value.code == 1
     out = capsys.readouterr().out
     assert out.startswith(load_data.DB_FAILURE_MESSAGE)
-    assert "DATABASE_URL" in out
+    assert "DB_HOST" in out
     assert "Underlying error: " in out
     assert str(closed_port) in out
     monkeypatch.undo()

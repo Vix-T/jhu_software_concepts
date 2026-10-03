@@ -8,7 +8,7 @@ from datetime import datetime
 
 import psycopg2
 
-from config import get_database_url
+from config import psycopg2_dsn
 
 # The cleaned Module 2 dataset, bundled with the repo (gzipped: 50.5 MB -> 4.0 MB).
 DATA_FILE = os.path.join(
@@ -19,8 +19,8 @@ DATA_FILE = os.path.join(
 
 DB_FAILURE_MESSAGE = (
     "LOAD FAILED: could not connect to PostgreSQL or write to the applicants table.\n"
-    "Check that DATABASE_URL is set (environment or module_5/.env) and points at a "
-    "running PostgreSQL server and an existing database you can write to."
+    "Check that DB_HOST, DB_PORT, DB_NAME, DB_USER and DB_PASSWORD (environment or module_5/.env)\n"
+    "point at a running PostgreSQL server and an existing database you can write to."
 )
 
 CREATE_TABLE_SQL = """
@@ -125,8 +125,8 @@ def load_records(path):
 
 
 def connect(database_url=None):
-    """Open a psycopg2 connection to database_url (default: DATABASE_URL)."""
-    return psycopg2.connect(database_url or get_database_url())
+    """Open a psycopg2 connection to database_url (default: the DB_* settings)."""
+    return psycopg2.connect(psycopg2_dsn(database_url))
 
 
 def create_table(conn):
@@ -137,7 +137,7 @@ def create_table(conn):
 
 
 def ensure_table(database_url=None):
-    """Create the applicants table in database_url (default: DATABASE_URL) if needed."""
+    """Create the applicants table in database_url (default: the DB_* settings) if needed."""
     conn = connect(database_url)
     try:
         create_table(conn)
@@ -221,7 +221,7 @@ def load_into_database(records, database_url=None):
 
 
 def main(data_file=DATA_FILE):
-    """Load `data_file` into DATABASE_URL and print a summary.
+    """Load `data_file` into the DB_* database and print a summary.
 
     Exits with status 1 and an actionable message if the data file is missing
     or the database can't be reached or written to.

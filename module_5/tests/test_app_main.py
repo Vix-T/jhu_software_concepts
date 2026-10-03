@@ -25,7 +25,7 @@ def test_main_runs_default_app_in_debug_threaded_mode(monkeypatch):
     assert kwargs == {"debug": True, "threaded": True}
     rules = {rule.rule for rule in app.url_map.iter_rules()}
     assert {"/", "/analysis", "/pull-data", "/update-analysis"} <= rules
-    # DATABASE_URL points at the test database for the whole run (conftest),
+    # The DB_* settings point at the test database for the whole run (conftest),
     # so the default app renders against it.
     response = app.test_client().get("/")
     assert response.status_code == 200

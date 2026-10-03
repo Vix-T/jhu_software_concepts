@@ -11,9 +11,9 @@ dependency is injectable so tests can substitute fakes:
                    (run_pull) and answers 200. When None, Pull Data launches
                    pull_data.py as a background subprocess and answers 202.
     loader         (records) -> (inserted, skipped, failed); default loads
-                   into DATABASE_URL via load_data.load_into_database().
+                   into the DB_* database via load_data.load_into_database().
     analysis_fn    () -> dict of analysis results; default runs
-                   get_analysis() against DATABASE_URL.
+                   get_analysis() against the DB_* database.
     refresh_fn     () -> None; what Update Analysis runs. Default recomputes
                    the analysis snapshot the page displays.
     busy_state     try_acquire/set_owner/release/is_busy/status (busy_state.py);
@@ -40,6 +40,7 @@ from flask import Flask, jsonify, render_template
 
 import load_data
 from busy_state import FileLockBusyState
+from config import db_env
 from models import make_session_factory
 from orm_queries import get_analysis
 from pull_data import default_result_path, pull_result, read_pull_result, run_pull, write_pull_result
@@ -84,7 +85,8 @@ def create_app(
     """Build the Flask app. See the module docstring for the injectable dependencies.
 
     config keys: SECRET_KEY (else the SECRET_KEY env var, else random),
-    DATABASE_URL (else config.get_database_url()), BUSY_LOCK_PATH,
+    DB_URL (a database URL, else the DB_* settings via config.get_db_url()),
+    BUSY_LOCK_PATH,
     PULL_RESULT_PATH (else pull_data.default_result_path()), plus any
     standard Flask setting such as TESTING.
     """
@@ -98,7 +100,7 @@ def create_app(
     app.add_template_filter(percent, "percent")
     app.add_template_filter(without_failure_prefix, "without_failure_prefix")
 
-    database_url = app.config.get("DATABASE_URL")
+    database_url = app.config.get("DB_URL")
     result_path = app.config.get("PULL_RESULT_PATH") or default_result_path()
 
     if busy_state is None:
@@ -109,7 +111,7 @@ def create_app(
         table_checked = []
 
         def analysis_fn():
-            """Default analysis: get_analysis() on DATABASE_URL, creating the table on first use."""
+            """Default analysis: get_analysis() on the configured database, creating the table on first use."""
             # First run against a fresh database: create the (empty) applicants
             # table so the page renders "N/A" answers instead of failing.
             if not table_checked:
@@ -121,7 +123,7 @@ def create_app(
     if loader is None:
 
         def loader(records):
-            """Default loader: insert records into DATABASE_URL via load_data."""
+            """Default loader: insert records into the configured database via load_data."""
             return load_data.load_into_database(records, database_url)
 
     if pull_launcher is None:
@@ -130,7 +132,7 @@ def create_app(
             """Default launcher: start pull_data.py as a background subprocess."""
             env = dict(os.environ)
             if database_url:
-                env["DATABASE_URL"] = database_url
+                env.update(db_env(database_url))
             env["PULL_RESULT_FILE"] = result_path
             return subprocess.Popen([sys.executable, PULL_DATA_SCRIPT], cwd=SRC_DIR, env=env)
 

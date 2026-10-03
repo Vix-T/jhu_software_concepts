@@ -101,7 +101,7 @@ def scrape_new_entries(
     debugger port is checked first (port_check, default _debugger_port_open)
     and PullPreconditionError is raised if nothing is listening. A
     caller-supplied driver_factory skips that check, since it doesn't attach
-    to Chrome. is_known(urls) -> set defaults to a lookup in DATABASE_URL.
+    to Chrome. is_known(urls) -> set defaults to a lookup in the DB_* database.
     Extra keyword arguments (e.g. start_url, delay_seconds, max_retries) are
     passed through to scrape.scrape_newest().
     """
@@ -185,7 +185,7 @@ def main(scraper=None, loader=None, result_path=None):
     """CLI entry point; records the outcome in the result file and exits 1 on failure.
 
     scraper/loader default to scrape_new_entries and
-    load_data.load_into_database (DATABASE_URL); result_path defaults to
+    load_data.load_into_database (DB_* database); result_path defaults to
     default_result_path().
     """
     result_path = result_path or default_result_path()

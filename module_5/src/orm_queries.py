@@ -22,7 +22,7 @@ import psycopg2
 from sqlalchemy import and_, case, func, or_, select
 
 import query_data
-from config import get_database_url
+from config import psycopg2_dsn
 from models import Applicant, make_session_factory
 from query_data import CS_PATTERN, JHU_PATTERN, NO_DATA, Q8_Q9_UNIVERSITIES
 from query_data import percent_or_none as _percent
@@ -283,7 +283,7 @@ def main():
         q9_count = orm_q9(session)
         custom1_contaminated, custom1_total, custom1_pct = orm_custom1(session)
 
-    conn = psycopg2.connect(get_database_url())
+    conn = psycopg2.connect(psycopg2_dsn())
     try:
         with conn.cursor() as cur:
             raw_q1_count = query_data.q1(cur)

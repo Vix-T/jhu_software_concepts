@@ -9,6 +9,7 @@ import pytest
 from conftest import make_record
 
 import orm_queries
+from config import db_env
 
 pytestmark = pytest.mark.analysis
 
@@ -170,7 +171,7 @@ def test_orm_queries_main_on_empty_table(capsys):
 def test_cli_exits_cleanly_on_empty_table(script, test_database_url):
     result = subprocess.run(
         [sys.executable, os.path.join(SRC_DIR, script)],
-        env={**os.environ, "DATABASE_URL": test_database_url},
+        env={**os.environ, **db_env(test_database_url)},
         capture_output=True,
         text=True,
         timeout=60,

@@ -63,7 +63,7 @@ def test_status_reports_running_and_subprocess_result(client, busy_state, pull_r
 def test_configured_result_path(test_database_url, tmp_path, fake_records, pull_result_path):
     configured = tmp_path / "configured.json"
     client = create_app(
-        {"DATABASE_URL": test_database_url, "TESTING": True, "PULL_RESULT_PATH": str(configured)},
+        {"DB_URL": test_database_url, "TESTING": True, "PULL_RESULT_PATH": str(configured)},
         scraper=FakeScraper(fake_records),
         busy_state=InMemoryBusyState(),
     ).test_client()

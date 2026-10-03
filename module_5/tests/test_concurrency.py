@@ -32,7 +32,7 @@ def test_simultaneous_pulls_launch_exactly_once(tmp_path, test_database_url):
         return FakeProcess()
 
     app = create_app(
-        {"DATABASE_URL": test_database_url, "TESTING": True},
+        {"DB_URL": test_database_url, "TESTING": True},
         busy_state=lock,
         pull_launcher=launcher,
     )

@@ -6,6 +6,7 @@ import sys
 
 import pytest
 from conftest import FakeScraper, Spy
+from sqlalchemy.engine import make_url
 
 import flask_app as app_module
 from busy_state import FileLockBusyState, InMemoryBusyState
@@ -23,7 +24,7 @@ def lock_path(tmp_path):
 
 @pytest.fixture
 def config(test_database_url, lock_path):
-    return {"DATABASE_URL": test_database_url, "TESTING": True, "BUSY_LOCK_PATH": lock_path}
+    return {"DB_URL": test_database_url, "TESTING": True, "BUSY_LOCK_PATH": lock_path}
 
 
 @pytest.fixture
@@ -74,8 +75,11 @@ def test_in_process_pull_with_default_lock_and_loader(config, lock_path, fake_re
 
 
 def test_default_launcher_starts_pull_subprocess(
-    config, lock_path, test_database_url, fake_popen, blocked_child, pull_result_path
+    config, lock_path, test_database_url, fake_popen, blocked_child, pull_result_path, monkeypatch
 ):
+    # A different database in the parent's environment: the child must get the
+    # app's configured DB_URL instead.
+    monkeypatch.setenv("DB_NAME", "decoy_parent_db_test")
     fake_popen.pid = blocked_child.pid
     client = app_module.create_app(config).test_client()
 
@@ -86,7 +90,11 @@ def test_default_launcher_starts_pull_subprocess(
     [(args, kwargs)] = fake_popen.launches
     assert args == [sys.executable, app_module.PULL_DATA_SCRIPT]
     assert kwargs["cwd"] == app_module.SRC_DIR
-    assert kwargs["env"]["DATABASE_URL"] == test_database_url
+    test_url = make_url(test_database_url)
+    assert kwargs["env"]["DB_NAME"] == test_url.database
+    assert kwargs["env"]["DB_HOST"] == test_url.host
+    assert kwargs["env"]["DB_PORT"] == str(test_url.port or 5432)
+    assert kwargs["env"]["DB_USER"] == test_url.username
     assert kwargs["env"]["PULL_RESULT_FILE"] == str(pull_result_path)
     # Ownership moved from the app process to the launched child.
     with open(lock_path, encoding="utf-8") as f:
@@ -119,7 +127,7 @@ class RacingBusyState(InMemoryBusyState):
 def test_lost_acquire_race_returns_409_without_launching(test_database_url):
     launcher = Spy()
     client = app_module.create_app(
-        {"DATABASE_URL": test_database_url, "TESTING": True},
+        {"DB_URL": test_database_url, "TESTING": True},
         busy_state=RacingBusyState(),
         pull_launcher=launcher,
     ).test_client()
