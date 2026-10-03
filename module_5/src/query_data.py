@@ -1,8 +1,18 @@
-"""Run Q7, Q8, Q9 analysis queries against the applicants table."""
+"""Run the analysis questions (Q1-Q9 + 2 custom) with raw SQL against the applicants table.
+
+Every statement is a psycopg2.sql composed object built by a *_query()
+function that returns (stmt, params); the q*() functions only execute what
+the builder returns. The table name is sql_utils.APPLICANTS (an
+sql.Identifier), runtime-chosen column names are sql.Identifier, every value
+-- including the fixed filter values below -- is a bound parameter, and every
+SELECT ends in LIMIT %s with a clamp_limit()-ed value.
+"""
 
 import psycopg2
+from psycopg2 import sql
 
 from config import psycopg2_dsn
+from sql_utils import APPLICANTS, MAX_LIMIT, SINGLE_ROW, clamp_limit
 
 # Word-boundary (\y) regex patterns, matched case-insensitively (~*).
 # See conversation history / query_results write-up for the false-positive
@@ -22,6 +32,25 @@ Q8_Q9_UNIVERSITIES = [
     ("MIT", MIT_PATTERN),
     ("Stanford", STANFORD_PATTERN),
     ("Carnegie Mellon", CARNEGIE_MELLON_PATTERN),
+]
+
+# Fixed filter values, passed as bound parameters (never written into SQL text).
+FALL_2026 = "Fall 2026"
+FALL_2025 = "Fall 2025"
+ACCEPTED = "Accepted"
+INTERNATIONAL = "International"
+AMERICAN = "American"
+MASTERS = "Masters"
+PHD = "PhD"
+GRE_MIN, GRE_MAX = 130, 170  # plausible GRE / GRE V range
+GRE_AW_MIN, GRE_AW_MAX = 0, 6  # plausible GRE AW range
+
+# (score column, low, high) for Q3: GPA is unrestricted (see q3's docstring).
+Q3_METRICS = [
+    ("GPA", "gpa", None),
+    ("GRE", "gre", (GRE_MIN, GRE_MAX)),
+    ("GRE V", "gre_v", (GRE_MIN, GRE_MAX)),
+    ("GRE AW", "gre_aw", (GRE_AW_MIN, GRE_AW_MAX)),
 ]
 
 
@@ -44,23 +73,203 @@ def _pct(value):
     return NO_DATA if value is None else f"{value:.2f}%"
 
 
+def _one_row_limit():
+    return clamp_limit(SINGLE_ROW)
+
+
+# ---------------------------------------------------------------------------
+# Query builders: each returns (stmt, params); nothing here touches a cursor.
+# ---------------------------------------------------------------------------
+
+
+def q1_query():
+    """Count of Fall 2026 entries, by term."""
+    stmt = sql.SQL("SELECT COUNT(*) FROM {} WHERE term ILIKE %s LIMIT %s").format(APPLICANTS)
+    return stmt, [FALL_2026, _one_row_limit()]
+
+
+def q2_query():
+    """International count and usable-classification count."""
+    stmt = sql.SQL(
+        """
+        SELECT
+            SUM(CASE WHEN us_or_international ILIKE %s THEN 1 ELSE 0 END),
+            COUNT(*)
+        FROM {}
+        WHERE us_or_international IS NOT NULL AND TRIM(us_or_international) <> %s
+        LIMIT %s
+        """
+    ).format(APPLICANTS)
+    return stmt, [INTERNATIONAL, "", _one_row_limit()]
+
+
+def q3_query(column, value_range):
+    """AVG and COUNT of one score column, optionally restricted to [low, high]."""
+    if value_range is None:
+        stmt = sql.SQL("SELECT AVG({col}), COUNT({col}) FROM {table} WHERE {col} IS NOT NULL LIMIT %s").format(
+            col=sql.Identifier(column), table=APPLICANTS
+        )
+        return stmt, [_one_row_limit()]
+    stmt = sql.SQL(
+        "SELECT AVG({col}), COUNT({col}) FROM {table} WHERE {col} BETWEEN %s AND %s LIMIT %s"
+    ).format(col=sql.Identifier(column), table=APPLICANTS)
+    low, high = value_range
+    return stmt, [low, high, _one_row_limit()]
+
+
+def q4_query():
+    """Average GPA of American applicants for Fall 2026."""
+    stmt = sql.SQL(
+        """
+        SELECT AVG(gpa), COUNT(gpa) FROM {}
+        WHERE term ILIKE %s
+          AND us_or_international ILIKE %s
+          AND gpa IS NOT NULL
+        LIMIT %s
+        """
+    ).format(APPLICANTS)
+    return stmt, [FALL_2026, AMERICAN, _one_row_limit()]
+
+
+def q5_query():
+    """Accepted count and total count for Fall 2025."""
+    stmt = sql.SQL(
+        """
+        SELECT
+            SUM(CASE WHEN status ILIKE %s THEN 1 ELSE 0 END),
+            COUNT(*)
+        FROM {}
+        WHERE term ILIKE %s
+        LIMIT %s
+        """
+    ).format(APPLICANTS)
+    return stmt, [ACCEPTED, FALL_2025, _one_row_limit()]
+
+
+def q6_query():
+    """Average GPA of accepted applicants for Fall 2026."""
+    stmt = sql.SQL(
+        """
+        SELECT AVG(gpa), COUNT(gpa) FROM {}
+        WHERE term ILIKE %s
+          AND status ILIKE %s
+          AND gpa IS NOT NULL
+        LIMIT %s
+        """
+    ).format(APPLICANTS)
+    return stmt, [FALL_2026, ACCEPTED, _one_row_limit()]
+
+
+def q7_query():
+    """JHU + Masters + Computer Science, all-time."""
+    stmt = sql.SQL(
+        """
+        SELECT COUNT(*) FROM {}
+        WHERE program ~* %s
+          AND program ~* %s
+          AND degree = %s
+        LIMIT %s
+        """
+    ).format(APPLICANTS)
+    return stmt, [JHU_PATTERN, CS_PATTERN, MASTERS, _one_row_limit()]
+
+
+def q8_q9_query(program_column, university_column):
+    """Fall 2026 + Accepted + PhD + CS at any Q8/Q9 university, matched on the given columns.
+
+    The OR clause has one "<university_column> ~* %s" per university, joined
+    with sql.SQL(" OR "); the patterns themselves are bound parameters.
+    """
+    university_clause = sql.SQL(" OR ").join(
+        sql.SQL("{} ~* %s").format(sql.Identifier(university_column)) for _ in Q8_Q9_UNIVERSITIES
+    )
+    stmt = sql.SQL(
+        """
+        SELECT COUNT(*) FROM {table}
+        WHERE term = %s
+          AND status = %s
+          AND degree = %s
+          AND {program} ~* %s
+          AND ({universities})
+        LIMIT %s
+        """
+    ).format(table=APPLICANTS, program=sql.Identifier(program_column), universities=university_clause)
+    params = [FALL_2026, ACCEPTED, PHD, CS_PATTERN]
+    params += [pattern for _, pattern in Q8_Q9_UNIVERSITIES]
+    params.append(_one_row_limit())
+    return stmt, params
+
+
+def breakdown_query(program_column, university_column, pattern):
+    """Q8/Q9 filters for a single university pattern, matched on the given columns."""
+    stmt = sql.SQL(
+        """
+        SELECT COUNT(*) FROM {table}
+        WHERE term = %s AND status = %s AND degree = %s
+          AND {program} ~* %s AND {university} ~* %s
+        LIMIT %s
+        """
+    ).format(
+        table=APPLICANTS,
+        program=sql.Identifier(program_column),
+        university=sql.Identifier(university_column),
+    )
+    return stmt, [FALL_2026, ACCEPTED, PHD, CS_PATTERN, pattern, _one_row_limit()]
+
+
+def custom1_query():
+    """Out-of-range and total counts of non-null GRE Quant scores."""
+    stmt = sql.SQL(
+        """
+        SELECT
+            SUM(CASE WHEN gre NOT BETWEEN %s AND %s THEN 1 ELSE 0 END),
+            COUNT(*)
+        FROM {}
+        WHERE gre IS NOT NULL
+        LIMIT %s
+        """
+    ).format(APPLICANTS)
+    return stmt, [GRE_MIN, GRE_MAX, _one_row_limit()]
+
+
+def custom2_query():
+    """Accepted and total counts per degree type, largest first, ties alphabetical.
+
+    One row per distinct degree value; LIMIT is MAX_LIMIT (the data has 8
+    degree types), so more than MAX_LIMIT distinct values would be truncated.
+    """
+    stmt = sql.SQL(
+        """
+        SELECT
+            degree,
+            SUM(CASE WHEN status ILIKE %s THEN 1 ELSE 0 END) AS accepted,
+            COUNT(*) AS total
+        FROM {}
+        WHERE degree IS NOT NULL
+        GROUP BY degree
+        ORDER BY total DESC, degree
+        LIMIT %s
+        """
+    ).format(APPLICANTS)
+    return stmt, [ACCEPTED, clamp_limit(MAX_LIMIT)]
+
+
+# ---------------------------------------------------------------------------
+# Execution: run a builder's (stmt, params) and shape the result.
+# ---------------------------------------------------------------------------
+
+
 def q1(cur):
     """Count of Fall 2026 entries, by term."""
-    cur.execute("SELECT COUNT(*) FROM applicants WHERE term ILIKE 'Fall 2026'")
+    stmt, params = q1_query()
+    cur.execute(stmt, params)
     return cur.fetchone()[0]
 
 
 def q2(cur):
     """Percent international among entries with a usable nationality classification."""
-    cur.execute(
-        """
-        SELECT
-            SUM(CASE WHEN us_or_international ILIKE 'International' THEN 1 ELSE 0 END),
-            COUNT(*)
-        FROM applicants
-        WHERE us_or_international IS NOT NULL AND TRIM(us_or_international) <> ''
-        """
-    )
+    stmt, params = q2_query()
+    cur.execute(stmt, params)
     numerator, denominator = cur.fetchone()
     numerator = numerator or 0
     return numerator, denominator, percent_or_none(numerator, denominator)
@@ -77,46 +286,24 @@ def q3(cur):
     known contamination and is left unrestricted.
     """
     averages = {}
-
-    cur.execute("SELECT AVG(gpa), COUNT(gpa) FROM applicants WHERE gpa IS NOT NULL")
-    averages["GPA"] = cur.fetchone()
-
-    cur.execute("SELECT AVG(gre), COUNT(gre) FROM applicants WHERE gre BETWEEN 130 AND 170")
-    averages["GRE"] = cur.fetchone()
-
-    cur.execute("SELECT AVG(gre_v), COUNT(gre_v) FROM applicants WHERE gre_v BETWEEN 130 AND 170")
-    averages["GRE V"] = cur.fetchone()
-
-    cur.execute("SELECT AVG(gre_aw), COUNT(gre_aw) FROM applicants WHERE gre_aw BETWEEN 0 AND 6")
-    averages["GRE AW"] = cur.fetchone()
-
+    for label, column, value_range in Q3_METRICS:
+        stmt, params = q3_query(column, value_range)
+        cur.execute(stmt, params)
+        averages[label] = cur.fetchone()
     return averages
 
 
 def q4(cur):
     """Average GPA of American applicants who applied for Fall 2026."""
-    cur.execute(
-        """
-        SELECT AVG(gpa), COUNT(gpa) FROM applicants
-        WHERE term ILIKE 'Fall 2026'
-          AND us_or_international ILIKE 'American'
-          AND gpa IS NOT NULL
-        """
-    )
+    stmt, params = q4_query()
+    cur.execute(stmt, params)
     return cur.fetchone()
 
 
 def q5(cur):
     """Percentage of Fall 2025 entries that are acceptances."""
-    cur.execute(
-        """
-        SELECT
-            SUM(CASE WHEN status ILIKE 'Accepted' THEN 1 ELSE 0 END),
-            COUNT(*)
-        FROM applicants
-        WHERE term ILIKE 'Fall 2025'
-        """
-    )
+    stmt, params = q5_query()
+    cur.execute(stmt, params)
     numerator, denominator = cur.fetchone()
     numerator = numerator or 0
     return numerator, denominator, percent_or_none(numerator, denominator)
@@ -124,68 +311,29 @@ def q5(cur):
 
 def q6(cur):
     """Average GPA of accepted applicants who applied for Fall 2026."""
-    cur.execute(
-        """
-        SELECT AVG(gpa), COUNT(gpa) FROM applicants
-        WHERE term ILIKE 'Fall 2026'
-          AND status ILIKE 'Accepted'
-          AND gpa IS NOT NULL
-        """
-    )
+    stmt, params = q6_query()
+    cur.execute(stmt, params)
     return cur.fetchone()
 
 
 def q7(cur):
     """JHU + master's degree + Computer Science, all-time, one combined count."""
-    cur.execute(
-        """
-        SELECT COUNT(*) FROM applicants
-        WHERE program ~* %s
-          AND program ~* %s
-          AND degree = 'Masters'
-        """,
-        (JHU_PATTERN, CS_PATTERN),
-    )
+    stmt, params = q7_query()
+    cur.execute(stmt, params)
     return cur.fetchone()[0]
 
 
 def q8(cur):
     """Fall 2026 + Accepted + PhD + CS, at one of 4 universities (original fields)."""
-    university_clause = " OR ".join(
-        "program ~* %s" for _ in Q8_Q9_UNIVERSITIES
-    )
-    params = [pattern for _, pattern in Q8_Q9_UNIVERSITIES]
-    cur.execute(
-        f"""
-        SELECT COUNT(*) FROM applicants
-        WHERE term = 'Fall 2026'
-          AND status = 'Accepted'
-          AND degree = 'PhD'
-          AND program ~* %s
-          AND ({university_clause})
-        """,
-        [CS_PATTERN] + params,
-    )
+    stmt, params = q8_q9_query("program", "program")
+    cur.execute(stmt, params)
     return cur.fetchone()[0]
 
 
 def q9(cur):
     """Same as Q8, but university/program matched via the LLM-generated fields."""
-    university_clause = " OR ".join(
-        "llm_generated_university ~* %s" for _ in Q8_Q9_UNIVERSITIES
-    )
-    params = [pattern for _, pattern in Q8_Q9_UNIVERSITIES]
-    cur.execute(
-        f"""
-        SELECT COUNT(*) FROM applicants
-        WHERE term = 'Fall 2026'
-          AND status = 'Accepted'
-          AND degree = 'PhD'
-          AND llm_generated_program ~* %s
-          AND ({university_clause})
-        """,
-        [CS_PATTERN] + params,
-    )
+    stmt, params = q8_q9_query("llm_generated_program", "llm_generated_university")
+    cur.execute(stmt, params)
     return cur.fetchone()[0]
 
 
@@ -193,24 +341,12 @@ def q8_q9_university_breakdown(cur):
     """Per-university sub-counts under the Q8/Q9 filters, for write-up evidence."""
     rows = []
     for name, pattern in Q8_Q9_UNIVERSITIES:
-        cur.execute(
-            """
-            SELECT COUNT(*) FROM applicants
-            WHERE term = 'Fall 2026' AND status = 'Accepted' AND degree = 'PhD'
-              AND program ~* %s AND program ~* %s
-            """,
-            (CS_PATTERN, pattern),
-        )
+        stmt, params = breakdown_query("program", "program", pattern)
+        cur.execute(stmt, params)
         orig_count = cur.fetchone()[0]
 
-        cur.execute(
-            """
-            SELECT COUNT(*) FROM applicants
-            WHERE term = 'Fall 2026' AND status = 'Accepted' AND degree = 'PhD'
-              AND llm_generated_program ~* %s AND llm_generated_university ~* %s
-            """,
-            (CS_PATTERN, pattern),
-        )
+        stmt, params = breakdown_query("llm_generated_program", "llm_generated_university", pattern)
+        cur.execute(stmt, params)
         llm_count = cur.fetchone()[0]
 
         rows.append((name, orig_count, llm_count))
@@ -223,15 +359,8 @@ def custom1(cur):
     Mirrors the BETWEEN 130 AND 170 filter already applied in Q3, but reports
     the contamination rate itself rather than filtering it out.
     """
-    cur.execute(
-        """
-        SELECT
-            SUM(CASE WHEN gre NOT BETWEEN 130 AND 170 THEN 1 ELSE 0 END),
-            COUNT(*)
-        FROM applicants
-        WHERE gre IS NOT NULL
-        """
-    )
+    stmt, params = custom1_query()
+    cur.execute(stmt, params)
     contaminated, total = cur.fetchone()
     contaminated = contaminated or 0
     return contaminated, total, percent_or_none(contaminated, total)
@@ -243,22 +372,14 @@ def custom2(cur):
     Ordered by entry count, largest first; degree types tied on count are
     ordered alphabetically, so the order is deterministic.
     """
-    cur.execute(
-        """
-        SELECT
-            degree,
-            SUM(CASE WHEN status ILIKE 'Accepted' THEN 1 ELSE 0 END) AS accepted,
-            COUNT(*) AS total
-        FROM applicants
-        WHERE degree IS NOT NULL
-        GROUP BY degree
-        ORDER BY total DESC, degree
-        """
-    )
+    stmt, params = custom2_query()
+    cur.execute(stmt, params)
     return [
         (degree, accepted, total, percent_or_none(accepted, total))
         for degree, accepted, total in cur.fetchall()
     ]
+
+
 
 
 def main():

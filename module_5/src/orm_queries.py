@@ -26,16 +26,22 @@ from config import psycopg2_dsn
 from models import Applicant, make_session_factory
 from query_data import CS_PATTERN, JHU_PATTERN, NO_DATA, Q8_Q9_UNIVERSITIES
 from query_data import percent_or_none as _percent
+from sql_utils import MAX_LIMIT, SINGLE_ROW, clamp_limit
 
 
 def _round2(value):
     return None if value is None else round(value, 2)
 
 
+def _single_row(stmt):
+    """Aggregate queries return exactly one row: LIMIT 1, through clamp_limit()."""
+    return stmt.limit(clamp_limit(SINGLE_ROW))
+
+
 def orm_q1(session):
     """Count of Fall 2026 entries, by term."""
     stmt = select(func.count()).where(Applicant.term.ilike("Fall 2026"))
-    return session.scalar(stmt)
+    return session.scalar(_single_row(stmt))
 
 
 def orm_q4(session):
@@ -45,14 +51,14 @@ def orm_q4(session):
         Applicant.us_or_international.ilike("American"),
         Applicant.gpa.isnot(None),
     )
-    return session.execute(stmt).one()
+    return session.execute(_single_row(stmt)).one()
 
 
 def orm_q5(session):
     """Percentage of Fall 2025 entries that are acceptances."""
     accepted = func.sum(case((Applicant.status.ilike("Accepted"), 1), else_=0))
     stmt = select(accepted, func.count()).where(Applicant.term.ilike("Fall 2025"))
-    numerator, denominator = session.execute(stmt).one()
+    numerator, denominator = session.execute(_single_row(stmt)).one()
     numerator = numerator or 0
     return numerator, denominator, _percent(numerator, denominator)
 
@@ -71,7 +77,7 @@ def orm_q8(session):
             university_clause,
         )
     )
-    return session.scalar(stmt)
+    return session.scalar(_single_row(stmt))
 
 
 def orm_q9(session):
@@ -91,7 +97,7 @@ def orm_q9(session):
             university_clause,
         )
     )
-    return session.scalar(stmt)
+    return session.scalar(_single_row(stmt))
 
 
 def orm_custom1(session):
@@ -100,7 +106,7 @@ def orm_custom1(session):
         case((~Applicant.gre.between(130, 170), 1), else_=0)
     )
     stmt = select(contaminated, func.count()).where(Applicant.gre.isnot(None))
-    contaminated_count, total = session.execute(stmt).one()
+    contaminated_count, total = session.execute(_single_row(stmt)).one()
     contaminated_count = contaminated_count or 0
     return contaminated_count, total, _percent(contaminated_count, total)
 
@@ -114,7 +120,7 @@ def q2_percent_international(session):
         Applicant.us_or_international.isnot(None),
         func.trim(Applicant.us_or_international) != "",
     )
-    numerator, denominator = session.execute(stmt).one()
+    numerator, denominator = session.execute(_single_row(stmt)).one()
     numerator = numerator or 0
     return numerator, denominator, _percent(numerator, denominator)
 
@@ -124,20 +130,20 @@ def q3_averages(session):
     averages = {}
 
     stmt = select(func.avg(Applicant.gpa), func.count(Applicant.gpa)).where(Applicant.gpa.isnot(None))
-    averages["GPA"] = session.execute(stmt).one()
+    averages["GPA"] = session.execute(_single_row(stmt)).one()
 
     stmt = select(func.avg(Applicant.gre), func.count(Applicant.gre)).where(Applicant.gre.between(130, 170))
-    averages["GRE"] = session.execute(stmt).one()
+    averages["GRE"] = session.execute(_single_row(stmt)).one()
 
     stmt = select(func.avg(Applicant.gre_v), func.count(Applicant.gre_v)).where(
         Applicant.gre_v.between(130, 170)
     )
-    averages["GRE V"] = session.execute(stmt).one()
+    averages["GRE V"] = session.execute(_single_row(stmt)).one()
 
     stmt = select(func.avg(Applicant.gre_aw), func.count(Applicant.gre_aw)).where(
         Applicant.gre_aw.between(0, 6)
     )
-    averages["GRE AW"] = session.execute(stmt).one()
+    averages["GRE AW"] = session.execute(_single_row(stmt)).one()
 
     return averages
 
@@ -149,7 +155,7 @@ def q6_avg_gpa_accepted(session):
         Applicant.status.ilike("Accepted"),
         Applicant.gpa.isnot(None),
     )
-    return session.execute(stmt).one()
+    return session.execute(_single_row(stmt)).one()
 
 
 def q7_jhu_masters_cs(session):
@@ -159,7 +165,7 @@ def q7_jhu_masters_cs(session):
         Applicant.program.op("~*")(CS_PATTERN),
         Applicant.degree == "Masters",
     )
-    return session.scalar(stmt)
+    return session.scalar(_single_row(stmt))
 
 
 def custom2_acceptance_by_degree(session):
@@ -170,6 +176,7 @@ def custom2_acceptance_by_degree(session):
         .where(Applicant.degree.isnot(None))
         .group_by(Applicant.degree)
         .order_by(func.count().desc(), Applicant.degree)
+        .limit(clamp_limit(MAX_LIMIT))
     )
     rows = session.execute(stmt).all()
     return [(degree, accepted_n, total, _percent(accepted_n, total)) for degree, accepted_n, total in rows]
@@ -197,12 +204,11 @@ APPLICANT_FIELDS = (
 def get_applicants(session, limit=None):
     """Return applicant rows as dicts keyed by the applicants-table column names.
 
-    Rows are ordered by p_id (insertion order). `limit` caps the number
-    returned; None returns every row.
+    Rows are ordered by p_id (insertion order). `limit` goes through
+    clamp_limit(): None means DEFAULT_LIMIT, and it is clamped to
+    [MIN_LIMIT, MAX_LIMIT].
     """
-    stmt = select(Applicant).order_by(Applicant.p_id)
-    if limit is not None:
-        stmt = stmt.limit(limit)
+    stmt = select(Applicant).order_by(Applicant.p_id).limit(clamp_limit(limit))
     return [
         {field: getattr(applicant, field) for field in APPLICANT_FIELDS}
         for applicant in session.scalars(stmt)

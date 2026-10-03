@@ -1,8 +1,9 @@
 """Flask app displaying the Module 3 applicant-data analysis (Q1-9 + 2 custom questions).
 
-All database reads go through the SQLAlchemy Applicant model (models.py);
-every question on the page is computed by orm_queries.get_analysis(), with
-no raw SQL / text() anywhere in this file.
+Every question on the page is computed by orm_queries.get_analysis()
+through the SQLAlchemy Applicant model (models.py). GET /api/applicants
+reads through applicant_search.py's psycopg2.sql-composed query. There is
+no SQL text anywhere in this file.
 
 create_app() builds the app; there is no module-level app. Every external
 dependency is injectable so tests can substitute fakes:
@@ -36,14 +37,17 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-from flask import Flask, jsonify, render_template
+import psycopg2
+from flask import Flask, jsonify, render_template, request
 
 import load_data
+from applicant_search import DEFAULT_ORDER, DEFAULT_SORT, build_applicants_query, run_applicants_query
 from busy_state import FileLockBusyState
 from config import db_env
 from models import make_session_factory
 from orm_queries import get_analysis
 from pull_data import default_result_path, pull_result, read_pull_result, run_pull, write_pull_result
+from sql_utils import ValidationError, clamp_limit
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 PULL_DATA_SCRIPT = os.path.join(SRC_DIR, "pull_data.py")
@@ -106,17 +110,22 @@ def create_app(
     if busy_state is None:
         busy_state = FileLockBusyState(app.config.get("BUSY_LOCK_PATH", LOCK_PATH))
 
+    table_checked = []
+
+    def ensure_table_once():
+        """Create the (empty) applicants table on first use against a fresh database."""
+        if not table_checked:
+            load_data.ensure_table(database_url)
+            table_checked.append(True)
+
     if analysis_fn is None:
         session_factory = make_session_factory(database_url)
-        table_checked = []
 
         def analysis_fn():
             """Default analysis: get_analysis() on the configured database, creating the table on first use."""
-            # First run against a fresh database: create the (empty) applicants
-            # table so the page renders "N/A" answers instead of failing.
-            if not table_checked:
-                load_data.ensure_table(database_url)
-                table_checked.append(True)
+            # First run against a fresh database: the page renders "N/A"
+            # answers instead of failing.
+            ensure_table_once()
             with session_factory() as session:
                 return get_analysis(session)
 
@@ -205,6 +214,31 @@ def create_app(
             return jsonify(busy=True), 409
         refresh_fn()
         return jsonify(ok=True), 200
+
+    @app.route("/api/applicants")
+    def api_applicants():
+        """GET /api/applicants: applicant rows; 400 on invalid parameters, 503 if the DB is down.
+
+        Query parameters: limit (clamped to [1, 100], default 10), sort (one
+        of applicant_search.SORT_COLUMNS), order ("asc"/"desc"), and an
+        optional university substring filter.
+        """
+        args = request.args
+        try:
+            limit = clamp_limit(args.get("limit"))
+            sort = args.get("sort", DEFAULT_SORT)
+            order = args.get("order", DEFAULT_ORDER)
+            stmt, params = build_applicants_query(limit, sort, order, args.get("university"))
+        except ValidationError as exc:
+            return jsonify(error=str(exc)), 400
+
+        try:
+            ensure_table_once()
+            rows = run_applicants_query(stmt, params, database_url)
+        except psycopg2.OperationalError:
+            app.logger.exception("Applicant search failed: database unavailable")
+            return jsonify(error="database unavailable"), 503
+        return jsonify(count=len(rows), limit=limit, sort=sort, order=order, rows=rows), 200
 
     return app
 
