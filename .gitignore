@@ -66,3 +66,8 @@ module_4/docs/build/html/.doctrees/
 .coverage
 htmlcov/
 module_4/CLAUDE.md
+
+# Module 5 local-only files (.env already covered by the global rule above)
+module_5/CLAUDE.md
+module_5/venv/
+module_5/docs/build/html/.doctrees/
