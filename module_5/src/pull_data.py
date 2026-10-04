@@ -75,7 +75,13 @@ CRASHED_PULL_ERROR = "pull process exited without reporting a result"
 
 # Failures main() records and reports (exit 1); anything else is a bug and
 # propagates with its traceback.
-RECORDED_FAILURES = (ScrapeRetriesExhausted, psycopg2.Error, OSError, ConfigError)
+RECORDED_FAILURES = (
+    ScrapeRetriesExhausted,
+    load_data.TableMissingError,
+    psycopg2.Error,
+    OSError,
+    ConfigError,
+)
 
 
 class PullPreconditionError(RuntimeError):

@@ -28,11 +28,13 @@ from sqlalchemy.engine import URL, make_url
 
 ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
 REQUIRED_VARS = ("DB_HOST", "DB_NAME", "DB_USER")
+# The least-privilege role the app connects as (created by setup_roles.py).
+APP_ROLE_VARS = ("APP_DB_USER", "APP_DB_PASSWORD")
 DEFAULT_PORT = 5432
 
 
 class ConfigError(RuntimeError):
-    """A required DB_* setting is missing, or DB_PORT is not an integer."""
+    """A required DB_* / APP_DB_* setting is missing, or DB_PORT is not an integer."""
 
 
 def get_db_url(env_file=ENV_FILE):
@@ -62,6 +64,22 @@ def get_db_url(env_file=ENV_FILE):
         port=port,
         database=os.environ["DB_NAME"],
     )
+
+
+def get_app_role(env_file=ENV_FILE):
+    """Return (APP_DB_USER, APP_DB_PASSWORD): the app role setup_roles.py creates.
+
+    Read from the environment, falling back to env_file (default:
+    module_5/.env). Raises ConfigError naming every missing or empty one.
+    """
+    load_dotenv(env_file)
+    missing = [name for name in APP_ROLE_VARS if not os.environ.get(name)]
+    if missing:
+        raise ConfigError(
+            f"Missing app role setting(s): {', '.join(missing)}. "
+            "Set them in the environment or in module_5/.env (see .env.example)."
+        )
+    return os.environ["APP_DB_USER"], os.environ["APP_DB_PASSWORD"]
 
 
 def psycopg2_dsn(db_url=None):

@@ -122,6 +122,48 @@ Run Pylint:
 python -m pylint src
 ```
 
+### Database roles (least privilege)
+
+Two roles: the owner (your PostgreSQL user, which owns `jhu_module5` and the
+`applicants` table, and runs `load_data.py`) and the app role `gradcafe_app`,
+which the Flask app and Pull Data connect as day to day. The app role can only
+connect, read (`SELECT`) and add (`INSERT`) applicant rows: no `UPDATE`,
+`DELETE`, `TRUNCATE`, `CREATE` (tables or temp tables), and no superuser,
+create-database or create-role attributes.
+
+1. Load the data as the owner (`python src/load_data.py`, above).
+2. Set `APP_DB_USER` and `APP_DB_PASSWORD` in `.env` (see `.env.example`).
+3. Create or update the role as the owner. The inline `DB_USER`/`DB_PASSWORD`
+   override `.env`; replace `your_owner_role` with the owner's name. It prints
+   the statements it ran, with the password masked, and is safe to re-run:
+
+   ```
+   DB_USER=your_owner_role DB_PASSWORD= python src/setup_roles.py
+   ```
+
+4. In `.env`, set `DB_USER` and `DB_PASSWORD` to the `APP_DB_USER` and
+   `APP_DB_PASSWORD` values, then start the app.
+
+Once `.env` points at the app role, the owner-only scripts need the owner
+override inline every time: `load_data.py` (the app role can't create the
+table) and `setup_roles.py` (it can't create roles or grant privileges):
+
+```
+DB_USER=your_owner_role DB_PASSWORD= python src/load_data.py
+DB_USER=your_owner_role DB_PASSWORD= python src/setup_roles.py
+```
+
+The app itself (`python src/flask_app.py`) and Pull Data run as the app role
+from `.env`, with no override.
+
+If the `applicants` table is missing, the app (connected as `gradcafe_app`)
+can't create it and answers 503 "applicants table missing; run load_data.py
+as the database owner".
+
+Local authentication note: Postgres.app trusts local connections, so the app
+role's password isn't checked locally. Its privileges still are: any statement
+outside `SELECT`/`INSERT` fails with "permission denied".
+
 ## Configure PostgreSQL
 
 1. Create two databases: one for the app and one for the tests. The test

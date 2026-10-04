@@ -34,6 +34,7 @@ setup(
         "pull_data",
         "query_data",
         "scrape",
+        "setup_roles",
         "sql_utils",
     ],
     install_requires=[

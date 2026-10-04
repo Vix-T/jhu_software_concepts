@@ -2,6 +2,7 @@
 
 import gzip
 import json
+import logging
 import os
 import sys
 from datetime import datetime
@@ -10,7 +11,17 @@ import psycopg2
 from psycopg2 import sql
 
 from config import ConfigError, psycopg2_dsn
-from sql_utils import APPLICANT_COLUMNS, APPLICANTS, MAX_LIMIT, clamp_limit
+from sql_utils import (
+    APPLICANT_COLUMNS,
+    APPLICANTS,
+    APPLICANTS_TABLE,
+    INSUFFICIENT_PRIVILEGE,
+    MAX_LIMIT,
+    SINGLE_ROW,
+    clamp_limit,
+)
+
+logger = logging.getLogger(__name__)
 
 # The cleaned Module 2 dataset, bundled with the repo (gzipped: 50.5 MB -> 4.0 MB).
 DATA_FILE = os.path.join(
@@ -159,11 +170,38 @@ def connect(database_url=None):
     return psycopg2.connect(psycopg2_dsn(database_url))
 
 
+TABLE_MISSING_MESSAGE = "applicants table missing; run load_data.py as the database owner"
+
+
+class TableMissingError(RuntimeError):
+    """The applicants table doesn't exist and the connected role isn't allowed to create it."""
+
+
+def table_exists_query():
+    """SELECT to_regclass(<applicants>): the table's name if it exists, else NULL."""
+    stmt = sql.SQL("SELECT to_regclass(%s) LIMIT %s")
+    return stmt, [APPLICANTS_TABLE, clamp_limit(SINGLE_ROW)]
+
+
 def create_table(conn):
-    """Create the applicants table on `conn` if it doesn't exist yet (commits)."""
+    """Create the applicants table on `conn` if it doesn't exist yet (commits).
+
+    Checks to_regclass() first and only runs CREATE TABLE when the table is
+    missing, so a role without CREATE on the schema (the app role) never
+    attempts DDL against a table that already exists. If the table is
+    missing and the role may not create it, raises TableMissingError.
+    """
     with conn:
         with conn.cursor() as cur:
-            cur.execute(CREATE_TABLE_SQL)
+            stmt, params = table_exists_query()
+            cur.execute(stmt, params)
+            if cur.fetchone()[0] is not None:
+                return
+            try:
+                cur.execute(CREATE_TABLE_SQL)
+            except INSUFFICIENT_PRIVILEGE as exc:
+                logger.error("Cannot create the applicants table as %s: %s", conn.info.user, exc)
+                raise TableMissingError(TABLE_MISSING_MESSAGE) from exc
 
 
 def ensure_table(database_url=None):

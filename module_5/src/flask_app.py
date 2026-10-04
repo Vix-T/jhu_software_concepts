@@ -42,8 +42,6 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 import psycopg2
-import psycopg2.errorcodes
-import psycopg2.errors
 import sqlalchemy.exc
 from flask import Flask, jsonify, render_template, request
 from selenium.common.exceptions import WebDriverException
@@ -69,7 +67,7 @@ from pull_data import (
     write_pull_result,
 )
 from scrape import ScrapeRetriesExhausted
-from sql_utils import ValidationError, clamp_limit
+from sql_utils import INSUFFICIENT_PRIVILEGE, ValidationError, clamp_limit
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +79,15 @@ LOCK_PATH = os.path.join(SRC_DIR, ".scrape_lock")
 # SQLAlchemy (the ORM analysis) wraps the same driver error in its own class.
 DB_UNAVAILABLE_ERRORS = (psycopg2.OperationalError, sqlalchemy.exc.OperationalError)
 DB_UNAVAILABLE = "database unavailable"
+DB_UNAVAILABLE_PAGE = (
+    "Database unavailable: the analysis could not be loaded. Check that PostgreSQL "
+    "is running and the DB_* settings are correct, then reload this page."
+)
 # Failures an in-process pull can actually hit and report: the scraper gave up
 # or couldn't attach to Chrome, the database rejected the load, a file/socket
 # error, or missing DB_* settings.
 PULL_FAILURES = (
+    load_data.TableMissingError,
     ScrapeRetriesExhausted,
     PullPreconditionError,
     WebDriverException,
@@ -95,9 +98,6 @@ PULL_FAILURES = (
 # Errors starting the pull subprocess.
 LAUNCH_FAILURES = (OSError, subprocess.SubprocessError)
 DEBUG_ENV = "FLASK_DEBUG"
-# The psycopg2 error class for SQLSTATE 42501 (e.g. a role without SELECT on
-# the table). Looked up by code because psycopg2.errors is a C extension.
-INSUFFICIENT_PRIVILEGE = psycopg2.errors.lookup(psycopg2.errorcodes.INSUFFICIENT_PRIVILEGE)
 
 
 def two_decimals(value):
@@ -229,22 +229,30 @@ class _AppRoutes:
                 self.refresh_analysis()
             except DB_UNAVAILABLE_ERRORS:
                 logger.exception("Analysis page: %s", DB_UNAVAILABLE)
-                page = render_template(
-                    "analysis.html",
-                    db_unavailable=True,
-                    pull_status=pull_status,
-                    last_result=last_result,
-                    refreshed_at=None,
-                )
-                return page, 503
+                return self._error_page(DB_UNAVAILABLE_PAGE, pull_status, last_result)
+            except load_data.TableMissingError as exc:
+                logger.exception("Analysis page: %s", exc)
+                return self._error_page(str(exc), pull_status, last_result)
         return render_template(
             "analysis.html",
-            db_unavailable=False,
+            db_error=None,
             pull_status=pull_status,
             last_result=last_result,
             refreshed_at=self.snapshot.refreshed_at,
             **self.snapshot.data,
         )
+
+    @staticmethod
+    def _error_page(message, pull_status, last_result):
+        """The analysis page with `message` in place of the questions, as a 503."""
+        page = render_template(
+            "analysis.html",
+            db_error=message,
+            pull_status=pull_status,
+            last_result=last_result,
+            refreshed_at=None,
+        )
+        return page, 503
 
     def pull_data(self):
         """POST /pull-data: start a pull (202 subprocess / 200 in-process), or 409 if busy."""
@@ -314,6 +322,9 @@ class _AppRoutes:
         except DB_UNAVAILABLE_ERRORS:
             logger.exception("Update Analysis: %s", DB_UNAVAILABLE)
             return jsonify(ok=False, error=DB_UNAVAILABLE), 503
+        except load_data.TableMissingError as exc:
+            logger.exception("Update Analysis: %s", exc)
+            return jsonify(ok=False, error=str(exc)), 503
         return jsonify(ok=True), 200
 
     def api_applicants(self):
@@ -341,6 +352,9 @@ class _AppRoutes:
         except INSUFFICIENT_PRIVILEGE:
             logger.exception("Applicant search: database permission denied")
             return jsonify(error="database permission denied"), 503
+        except load_data.TableMissingError as exc:
+            logger.exception("Applicant search: %s", exc)
+            return jsonify(error=str(exc)), 503
         return jsonify(count=len(rows), limit=limit, sort=sort, order=order, rows=rows), 200
 
 

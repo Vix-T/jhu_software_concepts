@@ -40,8 +40,8 @@
   </header>
 
   <main>
-    {% if db_unavailable %}
-    <p class="db-unavailable" data-testid="db-unavailable">Database unavailable: the analysis could not be loaded. Check that PostgreSQL is running and the DB_* settings are correct, then reload this page.</p>
+    {% if db_error %}
+    <p class="db-unavailable" data-testid="db-unavailable">{{ db_error }}</p>
     {% else %}
     <section class="question">
       <h2>Q1</h2>

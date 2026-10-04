@@ -8,9 +8,12 @@ LIMIT whose value is a bound parameter that has been through clamp_limit().
 
 import re
 
+import psycopg2.errorcodes
+import psycopg2.errors
 from psycopg2 import sql
 
-APPLICANTS = sql.Identifier("applicants")
+APPLICANTS_TABLE = "applicants"
+APPLICANTS = sql.Identifier(APPLICANTS_TABLE)
 # The applicants table's columns, in table order (see load_data.CREATE_TABLE_SQL).
 APPLICANT_COLUMNS = (
     "p_id",
@@ -34,6 +37,10 @@ MIN_LIMIT = 1
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 100
 SINGLE_ROW = 1  # aggregate queries (COUNT/AVG/SUM) return exactly one row
+
+# The psycopg2 error class for SQLSTATE 42501 (permission denied / must be owner).
+# Looked up by code because psycopg2.errors is a C extension Pylint can't inspect.
+INSUFFICIENT_PRIVILEGE = psycopg2.errors.lookup(psycopg2.errorcodes.INSUFFICIENT_PRIVILEGE)
 
 _INTEGER_TEXT = re.compile(r"-?\d+")
 # int() refuses strings over ~4300 digits; anything longer than this is

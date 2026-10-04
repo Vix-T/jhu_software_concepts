@@ -13,8 +13,9 @@ import sys
 
 import psycopg2
 import pytest
+from psycopg2 import sql
 from bs4 import BeautifulSoup
-from conftest import FakeScraper, make_record, make_records
+from conftest import FakeScraper, drop_role, make_record, make_records, role_url
 from sqlalchemy.engine import make_url
 
 import load_data
@@ -336,14 +337,21 @@ NO_ACCESS_PASSWORD = "noaccess-test-only"
 
 @pytest.fixture
 def no_access_url(db_conn, test_database_url):
-    """A real login role with no grants on the test database's schema or table."""
+    """A real login role that may connect but has no grants on the table.
+
+    CONNECT is granted explicitly: setup_roles revokes PUBLIC's default
+    CONNECT on the database, so a role without it couldn't log in at all.
+    """
+    drop_role(db_conn, NO_ACCESS_ROLE)
     with db_conn, db_conn.cursor() as cur:
-        cur.execute(f"DROP ROLE IF EXISTS {NO_ACCESS_ROLE}")
         cur.execute(f"CREATE ROLE {NO_ACCESS_ROLE} LOGIN PASSWORD %s", (NO_ACCESS_PASSWORD,))
-    url = make_url(test_database_url).set(username=NO_ACCESS_ROLE, password=NO_ACCESS_PASSWORD)
-    yield url.render_as_string(hide_password=False)
-    with db_conn, db_conn.cursor() as cur:
-        cur.execute(f"DROP ROLE IF EXISTS {NO_ACCESS_ROLE}")
+        cur.execute(
+            sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                sql.Identifier(make_url(test_database_url).database), sql.Identifier(NO_ACCESS_ROLE)
+            )
+        )
+    yield role_url(test_database_url, NO_ACCESS_ROLE, NO_ACCESS_PASSWORD)
+    drop_role(db_conn, NO_ACCESS_ROLE)
 
 
 def test_api_permission_denied_is_503(no_access_url, caplog):

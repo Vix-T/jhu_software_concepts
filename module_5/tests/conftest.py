@@ -18,11 +18,13 @@ from an empty table.
 """
 
 import os
+import secrets
 
 import psycopg2
 import pytest
 from bs4 import BeautifulSoup
 from dotenv import dotenv_values
+from psycopg2 import sql
 from selenium.common.exceptions import NoSuchElementException
 from sqlalchemy.engine import make_url
 
@@ -54,10 +56,19 @@ def _read_test_database_url():
     return url
 
 
+# Roles are cluster-wide, so the tests use their own app role name and a
+# throwaway password: setup_roles can never touch the dev gradcafe_app role.
+TEST_APP_ROLE = "gradcafe_app_test"
+
+
 def pytest_configure(config):
     test_url = _read_test_database_url()
     config.test_database_url = test_url
-    test_env = db_env(test_url)
+    test_env = {
+        **db_env(test_url),
+        "APP_DB_USER": TEST_APP_ROLE,
+        "APP_DB_PASSWORD": secrets.token_urlsafe(16),
+    }
     for name in test_env:
         _saved_db_env[name] = os.environ.get(name, _UNSET)
     os.environ.update(test_env)
@@ -337,3 +348,23 @@ def app(make_app, scraper, loader_spy, refresh_spy):
 @pytest.fixture
 def client(app):
     return app.test_client()
+
+
+# ---------------------------------------------------------------------------
+# Test-only database roles
+# ---------------------------------------------------------------------------
+
+
+def drop_role(conn, role):
+    """Drop `role` and its privileges in the test database (a no-op if it doesn't exist)."""
+    with conn, conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
+        if cur.fetchone() is not None:
+            cur.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role)))
+            cur.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
+def role_url(test_database_url, role, password):
+    """TEST_DATABASE_URL, logging in as `role` instead."""
+    url = make_url(test_database_url).set(username=role, password=password)
+    return url.render_as_string(hide_password=False)
