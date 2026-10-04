@@ -36,4 +36,14 @@ included inside that folder.
   [Read the Docs](https://jhu-software-concepts-vtalbot1.readthedocs.io). See
   `module_4/README.md` for setup, run instructions, and how to run the tests.
 
+- **[module_5](./module_5)** — Security and supply-chain hardening of the
+  Grad Cafe analytics app: SQL composed safely with `psycopg2.sql` and
+  clamped `LIMIT`s, database settings from environment variables, a
+  least-privilege `gradcafe_app` database role, Pylint 10.00/10 with
+  specific exception handling, pinned dependencies with an editable
+  `setup.py` install, a pydeps dependency graph, Snyk dependency and code
+  scans, and a four-job GitHub Actions CI pipeline. See
+  `module_5/README.md` for setup and `module_5/module_5_report.pdf` for
+  the report.
+
 More modules will be added here as the semester progresses.

@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Module 5 Report</title>
+<style>
+  @page { size: Letter; margin: 0.7in 0.75in; }
+  :root {
+    --text: #1a1a1a;
+    --muted: #555;
+    --rule: #c9c9c9;
+    --code-bg: #f4f4f2;
+    --head-bg: #ecece8;
+    --accent: #1f3b5c;
+  }
+  html { background: #fff; }
+  body {
+    margin: 0 auto;
+    max-width: 7in;
+    padding: 0 16px;
+    background: #fff;
+    color: var(--text);
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 10.5pt;
+    line-height: 1.42;
+  }
+  @media print { body { padding: 0; max-width: none; } }
+  h1 { font-size: 19pt; color: var(--accent); margin: 0 0 2pt; }
+  .byline { color: var(--muted); margin: 0 0 14pt; font-size: 10pt; }
+  h2 {
+    font-size: 13pt; color: var(--accent);
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 2pt; margin: 16pt 0 6pt;
+    break-after: avoid;
+  }
+  h3 { font-size: 11pt; margin: 10pt 0 4pt; break-after: avoid; }
+  p { margin: 0 0 6pt; }
+  ul { margin: 0 0 6pt; padding-left: 18pt; }
+  li { margin: 0 0 2pt; }
+  code, pre {
+    font-family: Menlo, Consolas, "Courier New", monospace;
+    font-size: 8.4pt;
+  }
+  code { background: var(--code-bg); padding: 0 2px; border-radius: 2px; }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    padding: 5pt 7pt;
+    margin: 0 0 7pt;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    break-inside: avoid;
+    line-height: 1.3;
+  }
+  pre code { background: none; padding: 0; }
+  table {
+    border-collapse: collapse; width: 100%;
+    margin: 2pt 0 8pt; font-size: 9.3pt;
+    break-inside: avoid;
+  }
+  th, td { border: 1px solid var(--rule); padding: 3pt 5pt; text-align: left; vertical-align: top; }
+  th { background: var(--head-bg); }
+  figure { margin: 4pt 0 10pt; break-inside: avoid; text-align: center; }
+  figure img { max-width: 100%; max-height: 4.6in; border: 1px solid var(--rule); }
+  figcaption { font-size: 9pt; color: var(--muted); margin-top: 3pt; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 8pt; break-inside: avoid; }
+  .two-col pre { margin: 0; }
+  .label { font-size: 9pt; font-weight: bold; color: var(--muted); margin: 0 0 2pt; }
+  .page-break { break-before: page; }
+</style>
+</head>
+<body>
+
+<h1>Module 5: Securing the Grad Café Analytics App</h1>
+<p class="byline">Vix Talbot (JHED: vtalbot1) · EN.605.256.82 Modern Software Concepts in Python · Johns Hopkins University, Fall 2026<br>
+Repository: github.com/Vix-T/jhu_software_concepts (folder <code>module_5/</code>)</p>
+
+<p>Module 5 takes the Module 4 Flask and PostgreSQL app (the Grad Café applicant analysis with Pull Data and
+Update Analysis) and hardens it: SQL composed safely with enforced limits, configuration from environment
+variables, a least-privilege database role, Pylint 10.00/10 with specific exception handling, reproducible
+packaging, a dependency graph, Snyk scans, and a four-job CI pipeline. All 307 tests pass at 100% statement
+coverage.</p>
+
+<h2>1. Installation and running</h2>
+<p>Prerequisites are Python 3.12, PostgreSQL and Graphviz. From a fresh clone:</p>
+<pre><code>git clone https://github.com/Vix-T/jhu_software_concepts.git
+cd jhu_software_concepts/module_5
+createdb jhu_module5 &amp;&amp; createdb jhu_module5_test
+cp .env.example .env</code></pre>
+<p>Then fill in the <code>DB_*</code> settings and <code>TEST_DATABASE_URL</code> in <code>.env</code>.</p>
+<div class="two-col">
+<div><p class="label">Option A: pip and venv</p>
+<pre><code>python3.12 -m venv venv
+source venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pip install -e .</code></pre></div>
+<div><p class="label">Option B: uv</p>
+<pre><code>uv venv --python 3.12
+source .venv/bin/activate
+uv pip sync requirements.txt
+uv pip install -e .</code></pre></div>
+</div>
+<p>Then load the data and run the app (http://127.0.0.1:5000/), the tests (from the repository root) and Pylint:</p>
+<pre><code>python src/load_data.py
+python src/flask_app.py
+python -m pytest -c module_5/pytest.ini -m "web or buttons or analysis or db or integration" module_5/tests
+python -m pylint src</code></pre>
+<p><code>requirements.in</code> lists the top-level packages; <code>requirements.txt</code> is the fully pinned lock
+compiled from it with <code>uv pip compile --universal</code>, so pip, uv and CI install identical versions. With
+uv, a conda environment must not be active (or <code>.venv</code> must be activated first), because uv would
+otherwise target <code>$CONDA_PREFIX</code> and <code>uv pip sync</code> would prune it.</p>
+
+<h2>2. Packaging: why <code>setup.py</code> matters</h2>
+<p><code>setup.py</code> declares the project (<code>gradcafe-analytics</code> 5.0.0), its modules under
+<code>src/</code> (<code>package_dir={"": "src"}</code>), its Python requirement and its runtime dependencies. That
+gives every context the same import behavior: the app, the test suite and CI all import <code>config</code>,
+<code>load_data</code> and the other modules by the same bare names, instead of each relying on its own
+<code>sys.path</code> adjustment. An editable install (<code>pip install -e .</code>) puts <code>src/</code> on the
+path once, so edits take effect immediately without reinstalling. Standard tools understand it too: uv reads
+<code>setup.py</code> the same way pip does, so <code>uv pip install -e .</code> works without extra configuration.</p>
+<p>The project is <strong>editable-only</strong> by design. The code finds its <code>templates/</code>,
+<code>static/</code>, <code>.env</code> and <code>data/</code> relative to <code>src/</code>. A regular install would
+copy only the <code>.py</code> files into site-packages, and those paths would break, so the README documents
+the editable install as the supported one. <code>install_requires</code> lists only the six runtime packages with
+lower bounds; the exact, fully pinned environment (including test, lint and docs tools) is
+<code>requirements.txt</code>.</p>
+
+<h2>3. Pylint and specific exception handling</h2>
+<p>Pylint runs from <code>module_5/</code> with <code>python -m pylint src</code> and scores
+<strong>10.00/10</strong> (<code>pylint_report.txt</code>). No check is disabled: there are no
+<code># pylint: disable</code> comments and no loosened configuration. Every warning was fixed in the code.</p>
+<p>The instructor's rule is to catch only the exceptions the code can actually handle. It was applied
+throughout:</p>
+<ul>
+  <li><strong>No broad catches.</strong> There is no bare <code>except:</code> and no <code>except Exception</code>.
+  Each handler names its exceptions, grouped in named tuples such as
+  <code>DB_UNAVAILABLE_ERRORS = (psycopg2.OperationalError, sqlalchemy.exc.OperationalError)</code>,
+  <code>LAUNCH_FAILURES = (OSError, subprocess.SubprocessError)</code>, and the Pull Data
+  <code>RECORDED_FAILURES</code> (retries exhausted, missing table, <code>psycopg2.Error</code>, file and socket
+  errors, configuration errors).</li>
+  <li><strong>Every handler acts.</strong> Each one logs the error (at a level matching its severity) and returns a
+  specific result: an HTTP status with a JSON error, a recorded pull failure, or a CLI exit code 1 with a clear
+  message. None of them uses <code>pass</code> or swallows the error silently.</li>
+  <li><strong>503s for database problems.</strong> An unreachable database, a missing <code>applicants</code> table,
+  or a permission error (SQLSTATE 42501) becomes a 503 with a specific message (for example "applicants table
+  missing; run load_data.py as the database owner"). Validation errors become 400s.</li>
+  <li><strong><code>finally</code> for cleanup.</strong> The Pull Data busy lock is released in a
+  <code>finally</code> block when the launch did not happen, and the file-lock guard in
+  <code>busy_state.py</code> always unlocks in <code>finally</code>. Database connections are closed the same way.
+  Cleanup therefore never depends on catching an exception.</li>
+  <li><strong>No debugger in error responses.</strong> Flask's interactive debugger is off by default and is enabled
+  only with <code>FLASK_DEBUG=1</code>, so error responses never expose tracebacks or a remote console.</li>
+</ul>
+
+<h2>4. SQL injection defenses</h2>
+<h3>Before and after</h3>
+<p>Before Module 5, Q8 and Q9 built their <code>WHERE</code> clause with an f-string. The interpolated text was
+only a join of constant placeholders, so it was not exploitable, but it put Python string formatting inside SQL,
+which the assignment forbids. Every statement is now a <code>psycopg2.sql</code> composed object.</p>
+<div class="two-col">
+<div><p class="label">Before (query_data.py, Module 4)</p>
+<pre><code>university_clause = " OR ".join(
+    "program ~* %s" for _ in Q8_Q9_UNIVERSITIES
+)
+cur.execute(
+    f"""
+    SELECT COUNT(*) FROM applicants
+    WHERE term = 'Fall 2026'
+      AND status = 'Accepted'
+      AND degree = 'PhD'
+      AND program ~* %s
+      AND ({university_clause})
+    """,
+    [CS_PATTERN] + params,
+)</code></pre></div>
+<div><p class="label">After (query_data.q8_q9_query)</p>
+<pre><code>university_clause = sql.SQL(" OR ").join(
+    sql.SQL("{} ~* %s").format(
+        sql.Identifier(university_column))
+    for _ in Q8_Q9_UNIVERSITIES
+)
+stmt = sql.SQL("""
+    SELECT COUNT(*) FROM {table}
+    WHERE term = %s AND status = %s
+      AND degree = %s AND {program} ~* %s
+      AND ({universities})
+    LIMIT %s
+""").format(table=APPLICANTS,
+    program=sql.Identifier(program_column),
+    universities=university_clause)</code></pre></div>
+</div>
+<h3>How statements are built</h3>
+<ul>
+  <li><strong>Builders and execution are separate.</strong> Each <code>*_query()</code> function only returns
+  <code>(stmt, params)</code>; the <code>q*()</code> functions only execute what the builder returns. The tests can
+  therefore inspect every statement's SQL text without touching a cursor.</li>
+  <li><strong>Identifiers.</strong> The table name (<code>sql_utils.APPLICANTS</code>) and every column chosen at
+  runtime are <code>sql.Identifier</code>, so PostgreSQL always sees them as quoted names. Fixed columns
+  (<code>term = %s</code>) are literal SQL inside constant statements, never assembled from input.</li>
+  <li><strong>Values only as bound parameters.</strong> Values, including the regex patterns and the LIMIT, are
+  always <code>%s</code> parameters, never part of the SQL text. Literals such as <code>'Fall 2026'</code> moved
+  out of the SQL into the parameter list.</li>
+  <li><strong>Not <code>str.format</code>.</strong> <code>sql.SQL(...).format(...)</code> is psycopg2's composition
+  API: it accepts only <code>Composable</code> objects (<code>Identifier</code>, <code>SQL</code>,
+  <code>Placeholder</code>) and quotes each correctly. Passing a plain string raises
+  <code>TypeError: Composed elements must be Composable</code>, so raw text cannot be spliced in by accident.</li>
+</ul>
+<h3>The <code>/api/applicants</code> endpoint</h3>
+<p>This is the one place user input chooses SQL structure, so every parameter is validated before any SQL
+exists. <code>sort</code> must be a key of <code>SORT_COLUMNS</code>, and only the fixed column name it maps to
+becomes an <code>Identifier</code>. <code>order</code> must be <code>asc</code> or <code>desc</code>, mapped to fixed
+<code>sql.SQL("ASC")</code>/<code>("DESC")</code>. <code>limit</code> goes through <code>clamp_limit()</code>.
+<code>university</code> (at most 100 characters) is a bound <code>ILIKE ... ESCAPE</code> parameter, with
+<code>\</code>, <code>%</code> and <code>_</code> escaped so a lone <code>%</code> cannot match everything. Anything
+else is a 400. The query runs on a read-only connection and never returns the free-text
+<code>comments</code> column.</p>
+<table>
+  <tr><th>Malicious input (tests/test_api_applicants.py)</th><th>Result</th></tr>
+  <tr><td><code>limit=10; DROP TABLE applicants</code>, <code>limit=1 OR 1=1</code></td><td>400, no SQL built</td></tr>
+  <tr><td><code>sort=date_added; DROP TABLE applicants</code>, <code>sort=url--</code>, <code>sort=1</code></td><td>400 (not in the allowlist)</td></tr>
+  <tr><td><code>order=asc; DROP TABLE applicants</code></td><td>400</td></tr>
+  <tr><td><code>university=' OR '1'='1</code>, <code>x'; DROP TABLE applicants; --</code>, <code>%' ; TRUNCATE applicants; --</code></td><td>200 with no matching rows; matched literally as text</td></tr>
+  <tr><td>After all nine requests</td><td>The table still exists, with the same row count</td></tr>
+</table>
+<p>A builder test also renders the statement for hostile <code>university</code> values and asserts that none of
+the user's text (<code>DROP</code>, <code>DELETE</code>, <code>'1'='1</code>) appears in the SQL, only in the
+parameters. As a sabotage check, replacing one placeholder with string concatenation made <strong>9 tests
+fail</strong>, so the suite does catch an injection regression. The analysis output before and after the SQL
+rewrite was <strong>byte-identical</strong>.</p>
+
+<h2>5. LIMIT enforcement</h2>
+<p><code>sql_utils.clamp_limit()</code> is the single place limits are decided. <code>None</code> means the default
+of 10, and every value is clamped to 1–100 (<code>0</code> → 1, <code>500</code> → 100). It accepts an
+<code>int</code> or a string of decimal digits with an optional leading <code>-</code>. Booleans, floats and any
+other text, including surrounding whitespace and <code>10; DROP TABLE applicants</code>, raise
+<code>ValidationError</code>, which the API turns into a 400. Every LIMIT value is a bound parameter that has passed
+through it:</p>
+<ul>
+  <li><strong>Single-row aggregates</strong> (<code>COUNT</code>, <code>AVG</code>, <code>SUM</code>) end in
+  <code>LIMIT %s</code> with <code>clamp_limit(SINGLE_ROW)</code> = 1, including the
+  <code>to_regclass</code> table check.</li>
+  <li><strong>Batched duplicate check.</strong> <code>existing_urls</code> looks up candidate URLs in batches of at
+  most 100 (<code>WHERE url = ANY(%s) LIMIT %s</code>, with the limit equal to the batch size, since
+  <code>url</code> is unique). It never selects the whole table.</li>
+  <li><strong>ORM.</strong> SQLAlchemy queries use <code>.limit(clamp_limit(...))</code>: 1 for aggregates, and the
+  clamped value for row listings.</li>
+  <li><strong>Exemptions.</strong> The rule, stated in the <code>sql_utils</code> docstring, covers every
+  <code>SELECT</code>. Statements that return no rows cannot take a LIMIT: <code>CREATE TABLE</code>, the per-row
+  <code>INSERT</code>, and the transaction-control <code>SAVEPOINT</code>, <code>ROLLBACK TO SAVEPOINT</code> and
+  <code>RELEASE SAVEPOINT</code> statements (commented as such in <code>load_data.py</code>).</li>
+</ul>
+
+<h2>6. Least privilege</h2>
+<p>Two roles separate ownership from day-to-day use. The <strong>owner</strong> (my PostgreSQL user) owns
+<code>jhu_module5</code> and the <code>applicants</code> table, and runs <code>load_data.py</code> and
+<code>setup_roles.py</code>. The <strong>app role</strong>, <code>gradcafe_app</code>, is what the Flask app and Pull
+Data connect as. <code>setup_roles.py</code> creates or updates it idempotently and prints what it ran, with the
+password masked. Below is the actual output of <code>setup_roles.py</code>, run as the owner against
+<code>jhu_module5</code>:</p>
+<pre><code>Role setup for gradcafe_app on database jhu_module5, run as vixedwards:
+  CREATE ROLE "gradcafe_app" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD '********';
+  REVOKE ALL ON DATABASE "jhu_module5" FROM PUBLIC;
+  REVOKE ALL ON DATABASE "jhu_module5" FROM "gradcafe_app";
+  GRANT CONNECT ON DATABASE "jhu_module5" TO "gradcafe_app";
+  REVOKE ALL ON SCHEMA "public" FROM "gradcafe_app";
+  GRANT USAGE ON SCHEMA "public" TO "gradcafe_app";
+  REVOKE ALL ON TABLE "applicants" FROM "gradcafe_app";
+  GRANT SELECT, INSERT ON TABLE "applicants" TO "gradcafe_app";
+  REVOKE ALL ON SEQUENCE "public"."applicants_p_id_seq" FROM "gradcafe_app";
+  GRANT USAGE ON SEQUENCE "public"."applicants_p_id_seq" TO "gradcafe_app";</code></pre>
+<table>
+  <tr><th>Privilege</th><th>Why</th></tr>
+  <tr><td><code>SELECT</code> on <code>applicants</code></td><td>The analysis page, Update Analysis and <code>/api/applicants</code> read rows.</td></tr>
+  <tr><td><code>INSERT</code> on <code>applicants</code></td><td>Pull Data adds newly scraped rows.</td></tr>
+  <tr><td><code>USAGE</code> on the <code>p_id</code> sequence</td><td><code>p_id</code> is <code>SERIAL</code>, so each insert calls <code>nextval()</code>.</td></tr>
+  <tr><td><code>CONNECT</code> on the database, <code>USAGE</code> on <code>public</code></td><td>The minimum needed to reach the table. No <code>TEMPORARY</code> and no <code>CREATE</code>.</td></tr>
+  <tr><td>Database access revoked from <code>PUBLIC</code></td><td>Other roles on the server can't connect by default.</td></tr>
+  <tr><td>Nothing else</td><td>No <code>UPDATE</code>, <code>DELETE</code>, <code>TRUNCATE</code> or DDL. Not a superuser and can't create databases or roles. The app never needs these, so a compromised app can't destroy data.</td></tr>
+</table>
+<figure>
+  <img src="../db-privileges.png" alt="psql output: gradcafe_app has only INSERT and SELECT on applicants, and rolsuper, rolcreatedb, rolcreaterole and rolinherit are all false">
+  <figcaption>Figure 1. <code>gradcafe_app</code> holds only <code>INSERT</code> and <code>SELECT</code> on
+  <code>applicants</code>, and has no superuser, create-database, create-role or inherit attributes.</figcaption>
+</figure>
+<p>Because the app role can't create the table, the app checks for it with
+<code>SELECT to_regclass('applicants') LIMIT 1</code> instead of attempting <code>CREATE TABLE</code>. If the table
+is missing, it answers 503 "applicants table missing; run load_data.py as the database owner". The tests verify the
+role's exact privileges, confirm that <code>UPDATE</code>/<code>DELETE</code>/<code>CREATE</code> fail with
+"permission denied", and run the app end to end as the role.</p>
+<p>Credentials never appear in code. <code>config.py</code> reads <code>DB_HOST</code>, <code>DB_PORT</code>,
+<code>DB_NAME</code>, <code>DB_USER</code> and <code>DB_PASSWORD</code> (and <code>APP_DB_USER</code>/<code>APP_DB_PASSWORD</code>
+for <code>setup_roles.py</code>) from the environment, falling back to <code>module_5/.env</code>. The
+<code>.env</code> file is gitignored; <code>.env.example</code> is the committed template with placeholders. The
+owner-only scripts take an inline override (<code>DB_USER=owner DB_PASSWORD= python src/setup_roles.py</code>). One
+caveat: locally, Postgres.app uses trust authentication, so the app role's <em>password</em> isn't checked, but its
+<em>privileges</em> are still enforced.</p>
+
+<h2>7. Dependency graph</h2>
+<figure>
+  <img src="../dependency.svg" alt="pydeps import graph of flask_app.py: 11 project modules and 6 third-party packages">
+  <figcaption>Figure 2. <code>dependency.svg</code>, generated by
+  <code>pydeps src/flask_app.py --noshow -T svg -o dependency.svg --max-module-depth 1 --rankdir TB --only …</code>.
+  Arrows point from a dependency to the module that imports it.</figcaption>
+</figure>
+<p><code>flask_app.py</code> is the entry point and imports almost every other module. It serves the analysis
+page, the Pull Data and Update Analysis routes, and <code>/api/applicants</code> through Flask.
+<code>pull_data</code> runs the scrape-and-load pipeline: <code>scrape</code> uses Selenium to
+<strong>attach to an already-running Chrome session</strong> through Chrome's remote-debugging port, a session I
+started and cleared through Grad Café's Cloudflare check by hand (it is not headless and does not launch a browser).
+BeautifulSoup (<code>bs4</code>) parses the result pages, and <code>load_data</code> inserts the cleaned rows into
+PostgreSQL through psycopg2. <code>config</code> is the single source of database settings: it reads the
+<code>DB_*</code> variables, with python-dotenv loading them from <code>.env</code>, and builds both the psycopg2
+connection string and the SQLAlchemy URL. <code>sql_utils</code> holds the shared safe-SQL pieces (the table
+identifier, LIMIT clamping, validation errors) used by <code>load_data</code>, <code>query_data</code>,
+<code>applicant_search</code> and <code>orm_queries</code>. The analysis has two implementations,
+<code>query_data</code> with raw psycopg2 SQL and <code>orm_queries</code> with SQLAlchemy over the
+<code>models</code> mapping, and <code>busy_state</code> is a standalone file lock that keeps a pull and an update
+from running at the same time. <code>setup_roles.py</code> is absent because it is a standalone command-line
+script that the app never imports.</p>
+
+<h2>8. Snyk scans</h2>
+<p>The dependency scan, run from <code>module_5/</code> with
+<code>snyk test --file=requirements.txt --package-manager=pip --command=venv/bin/python</code>, tested
+<strong>64 dependencies and found 0 issues</strong>, with nothing ignored. The Stage 4 pins already avoided every
+known vulnerability, so no upgrades were needed.</p>
+<figure>
+  <img src="../snyk-analysis.png" alt="snyk test output: tested 64 dependencies for known issues, no vulnerable paths found, total issues 0">
+  <figcaption>Figure 3. Snyk Open Source: 64 dependencies, 0 issues.</figcaption>
+</figure>
+<p><strong>Marker workaround.</strong> The universal lock contains two Windows-only entries,
+<code>cffi==2.1.1</code> and <code>pycparser==3.0</code> (pulled in by trio, via Selenium, on Windows), with
+<code>os_name == 'nt'</code> environment markers. Snyk's pip resolver ignores those markers and stops with "Missing
+required packages", and <code>--skip-unresolved</code> does not help. Installing the two locked versions into the
+venv (<code>uv pip install cffi==2.1.1 pycparser==3.0 --python venv/bin/python</code>) lets the scan run and covers
+them as well. The README documents this, and CI does the same.</p>
+<h3>Snyk Code (extra credit)</h3>
+<p><code>snyk code test src</code> and <code>snyk code test tests</code> report 11 findings in the project's own
+code. I reviewed each one. All are false positives, and they are left open as documented exceptions
+(<code>SNYK_FINDINGS.md</code>) rather than ignored or worked around with code changes that would only satisfy the
+scanner.</p>
+<figure>
+  <img src="../snyk-code-analysis.png" alt="snyk code test output listing the open findings">
+  <figcaption>Figure 4. End of <code>snyk code test src</code>: the last findings and the summary (8 open: 1 high, 7 low; 0 ignored). The 3 test-file findings come from <code>snyk code test tests</code> (<code>snyk_code_output.txt</code>).</figcaption>
+</figure>
+<table>
+  <tr><th>Rule</th><th>Location</th><th>Severity</th><th>Why it is a false positive</th></tr>
+  <tr><td>SQL Injection</td><td><code>flask_app.py:348</code></td><td>High</td><td>Snyk traces the query parameters into <code>execute()</code>, but no input becomes SQL text: <code>sort</code> and <code>order</code> are looked up in allowlists that map to fixed SQL, <code>limit</code> and <code>university</code> are bound parameters, and anything else is a 400 before a query is built. Snyk doesn't treat the allowlist lookup as a sanitizer.</td></tr>
+  <tr><td>Path Traversal (×7)</td><td><code>flask_app.py:226, 281, 287, 304, 308, 314</code>; <code>pull_data.py:179</code></td><td>Low</td><td>Every trace starts at the <code>PULL_RESULT_FILE</code> environment variable and ends at <code>os.replace()</code> when the pull result file is written. Only whoever starts the server (or the app, for its own child process) sets that variable; no HTTP request can reach it, and anyone who can set it can already run code as the app.</td></tr>
+  <tr><td>Hardcoded Passwords (×3)</td><td><code>tests/test_config.py:18, 60, 134</code></td><td>Low</td><td>Made-up values in unit tests of the configuration parser. They never authenticate to anything; Snyk's own rule ID marks them as test findings.</td></tr>
+</table>
+
+<h2>9. Continuous integration</h2>
+<p><code>.github/workflows/ci.yml</code> runs on every push and pull request to <code>main</code> (and on demand).
+It has four independent jobs, each on Ubuntu 24.04 with Python 3.12, a pip cache, and
+<code>module_5/requirements.txt</code>:</p>
+<table>
+  <tr><th>Job</th><th>What it enforces</th></tr>
+  <tr><td><code>pylint</code></td><td><code>python -m pylint src --fail-under=10</code>. It first checks that the workflow's mirrored copy is identical.</td></tr>
+  <tr><td><code>dependency-graph</code></td><td>Installs Graphviz from apt, runs the README's pydeps command, fails unless <code>dependency.svg</code> exists and contains graph nodes, and uploads it as an artifact.</td></tr>
+  <tr><td><code>snyk</code></td><td>Installs a pinned Snyk CLI (1.1307.4, SHA-256 verified) and the marker workaround, then runs <code>snyk test --severity-threshold=high</code>, which fails the job on any high or critical issue. <code>snyk code test src</code> runs as a report only, because of the documented false positives.</td></tr>
+  <tr><td><code>pytest</code></td><td>The full suite against a PostgreSQL 16 service container (trust auth, health-checked), with 100% coverage enforced by <code>pytest.ini</code>.</td></tr>
+</table>
+<p>The Snyk job authenticates with the <code>SNYK_TOKEN</code> repository secret, which is never printed; if the
+secret is missing, the job stops with a clear error. GitHub only runs workflows from the repository root, so
+that copy is the one that executes. <code>module_5/.github/workflows/ci.yml</code> is an identical copy for the
+expected module layout, and the <code>pylint</code> job fails if the two differ.</p>
+<figure>
+  <img src="../actions_success.png" alt="GitHub Actions run of Module 5 CI: pylint, dependency-graph, snyk and pytest all succeeded">
+  <figcaption>Figure 5. A green Module 5 CI run: all four jobs passed.</figcaption>
+</figure>
+
+</body>
+</html>

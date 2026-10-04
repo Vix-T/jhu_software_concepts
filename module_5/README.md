@@ -4,54 +4,54 @@ Vix Talbot (JHED: vtalbot1)
 
 ## Overview
 
-Module 4 takes the Module 3 Grad Café analytics app and makes it testable,
-tested and documented. The app loads cleaned Grad Café applicant data
-(scraped and LLM-standardized in Module 2) into PostgreSQL, answers a fixed
-set of questions with both raw SQL (`query_data.py`) and the SQLAlchemy ORM
-(`orm_queries.py`), and shows them on a Flask page (`flask_app.py`) with "Pull
-Data" (fetch the newest entries) and "Update Analysis" (recompute the
-answers) buttons.
+Module 5 hardens the Grad Café analytics app from Modules 3 and 4. The app
+loads cleaned Grad Café applicant data (scraped and LLM-standardized in
+Module 2) into PostgreSQL, answers a fixed set of questions with both raw SQL
+(`query_data.py`) and the SQLAlchemy ORM (`orm_queries.py`), and shows them on
+a Flask page (`flask_app.py`) with "Pull Data" (fetch the newest entries) and
+"Update Analysis" (recompute the answers) buttons, plus a JSON search
+endpoint, `GET /api/applicants`.
 
-For Module 4 the code was refactored around a `create_app()` factory with
-injectable dependencies (scraper, loader, busy state, analysis), covered by
-a marked pytest suite at 100% statement coverage that runs against an
-isolated test database with fakes instead of a browser or network, checked
-in GitHub Actions CI, and documented with Sphinx on Read the Docs.
+Module 5 adds:
 
-**Documentation:** https://jhu-software-concepts-vtalbot1.readthedocs.io
+* **Safe SQL:** every raw-SQL statement is composed with `psycopg2.sql`
+  (identifiers as `sql.Identifier`, values only as bound parameters), and
+  every `SELECT` has a clamped `LIMIT`.
+* **Configuration from environment variables** (`DB_*`, read from the
+  environment or `.env`), with no credentials in the code.
+* **Least privilege:** the app connects as `gradcafe_app`, which can only
+  `SELECT` and `INSERT` applicant rows.
+* **Code quality:** Pylint 10.00/10 with specific exception handling only.
+* **Packaging:** pinned `requirements.txt` and an editable `setup.py` install.
+* **Supply-chain checks:** a pydeps dependency graph, Snyk scans, and
+  GitHub Actions CI with four jobs.
+
+The report is `module_5_report.pdf` (source: `report/module_5_report.html`).
 
 ## Deliverables
 
-| Deliverable | Location |
+| Deliverable | Location (in `module_5/` unless noted) |
 |---|---|
-| Application source | `module_4/src/` |
-| Test suite (135 tests, all marked) | `module_4/tests/` |
-| Coverage report (100%) | `module_4/coverage_summary.txt` |
-| CI workflow | `.github/workflows/tests.yml` (repository root) |
-| Green CI run screenshot | `module_4/actions_success.png` |
-| Sphinx source | `module_4/docs/source/` |
-| Built HTML documentation | `module_4/docs/build/html/` (open `index.html`) |
-| Read the Docs configuration | `.readthedocs.yaml` (repository root) |
-| Dependencies (app, tests, coverage, docs) | `module_4/requirements.txt` |
-
-## Set up the project
-
-Requires Python 3.12 and PostgreSQL (developed against 15, tested in CI
-against 16).
-
-```
-git clone https://github.com/Vix-T/jhu_software_concepts.git
-cd jhu_software_concepts
-python -m pip install -r module_4/requirements.txt
-```
-
-`requirements.txt` covers the app, the tests and coverage, and the Sphinx
-documentation build.
+| Report (PDF) and its HTML source | `module_5_report.pdf`, `report/module_5_report.html` |
+| Application source | `src/` |
+| Test suite (307 tests, all marked) | `tests/`, `pytest.ini` |
+| Coverage report (100%) | `coverage_summary.txt` |
+| Pylint report (10.00/10) | `pylint_report.txt` |
+| Packaging | `setup.py` |
+| Dependencies | `requirements.in` (top level), `requirements.txt` (pinned lock) |
+| Environment template | `.env.example` |
+| Dependency graph | `dependency.svg` |
+| Snyk dependency scan | `snyk_test_output.txt`, `snyk-analysis.png` |
+| Snyk Code scan (extra credit) | `snyk_code_output.txt`, `snyk-code-analysis.png`, `SNYK_FINDINGS.md` |
+| Database privileges evidence | `db-privileges.png` |
+| CI workflow | `.github/workflows/ci.yml` (repository root; mirrored at `module_5/.github/workflows/ci.yml`) |
+| Green CI run screenshot | `actions_success.png` |
+| Sphinx source | `docs/source/` |
 
 ## Fresh Install
 
-Prerequisites: Python 3.12, PostgreSQL, and Graphviz (its `dot` command
-draws the module dependency graph).
+Prerequisites: Python 3.12, PostgreSQL (developed against 15, tested in CI
+against 16), and Graphviz (its `dot` command draws the dependency graph).
 
 The supported install is editable (`pip install -e .`): the code locates its
 templates, static files, `.env` and `data/` relative to `src/`, so the modules
@@ -60,6 +60,8 @@ must be imported from `src/` itself rather than copied into site-packages.
 `requirements.in` lists the top-level dependencies; `requirements.txt` is the
 fully pinned lock generated from it (every transitive dependency included,
 since `uv pip sync` installs exactly what the lock lists and nothing else).
+It covers the app, the tests and coverage, Pylint, pydeps and the Sphinx
+build.
 
 Get the code, create the databases, and create `.env` from the template:
 
@@ -71,8 +73,7 @@ createdb jhu_module5_test
 cp .env.example .env
 ```
 
-Edit `.env`: set `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
-for `jhu_module5`, and `TEST_DATABASE_URL` for `jhu_module5_test`.
+Edit `.env` (see [Environment variables](#environment-variables)).
 
 ### Option A: pip and venv
 
@@ -94,35 +95,49 @@ uv pip sync requirements.txt
 uv pip install -e .
 ```
 
-### Then, with the environment active (from `module_5/`)
+## Environment variables
 
-Load the bundled dataset into `jhu_module5`:
+Settings are read from the environment first, then from `module_5/.env`
+(git-ignored; `.env.example` is the template). A variable already set in
+the environment always wins over `.env`.
+
+| Variable | Required | Meaning |
+|---|---|---|
+| `DB_HOST` | yes | PostgreSQL server host |
+| `DB_PORT` | no | PostgreSQL port (default 5432) |
+| `DB_NAME` | yes | The development database, `jhu_module5` (the tests never use it) |
+| `DB_USER` | yes | The user the app connects as: the owner at first, then `gradcafe_app` (see [Database roles](#database-roles-least-privilege)) |
+| `DB_PASSWORD` | no | Its password; leave empty for local trust authentication |
+| `TEST_DATABASE_URL` | for tests | The test database URL, e.g. `postgresql://your_username@localhost:5432/jhu_module5_test`; its name must end in `_test` |
+| `APP_DB_USER` | for `setup_roles.py` | The least-privilege role to create (`gradcafe_app`) |
+| `APP_DB_PASSWORD` | for `setup_roles.py` | Its password |
+| `FLASK_DEBUG` | no | `1` turns on the Flask debugger and reloader (never in production; off by default) |
+
+A missing required variable stops the app and scripts with a message
+naming every missing one.
+
+## Configure PostgreSQL and load the data
+
+With `.env` pointing at `jhu_module5` as the database owner (your own
+PostgreSQL user), load the bundled dataset
+(`data/llm_extend_applicant_data_full.json.gz`, the cleaned Module 2 data).
+This creates the `applicants` table if needed:
 
 ```
 python src/load_data.py
 ```
 
-Run the app (http://127.0.0.1:5000/; set `FLASK_DEBUG=1` in `.env` for the debugger):
+To load a different file, pass its path (`.json` or `.json.gz`):
+`python src/load_data.py path/to/data.json`. If PostgreSQL isn't reachable,
+the loader exits with status 1 and says what to check.
 
-```
-python src/flask_app.py
-```
+**Expected results after a fresh load:** `Inserted: 60024`,
+`Skipped duplicates: 0`, `Failed to parse: 1`. The file holds 60,025
+records; one has no URL (0-based record index 13125) and is skipped, because
+the URL is the table's natural key. The page then shows Fall 2026 applicant
+count (Q1) = **32,344**, Q7 = 20, Q8 = 30, Q9 = 26.
 
-Run the tests (from the repository root):
-
-```
-cd ..
-python -m pytest -c module_5/pytest.ini -m "web or buttons or analysis or db or integration" module_5/tests
-cd module_5
-```
-
-Run Pylint:
-
-```
-python -m pylint src
-```
-
-### Database roles (least privilege)
+## Database roles (least privilege)
 
 Two roles: the owner (your PostgreSQL user, which owns `jhu_module5` and the
 `applicants` table, and runs `load_data.py`) and the app role `gradcafe_app`,
@@ -132,7 +147,7 @@ connect, read (`SELECT`) and add (`INSERT`) applicant rows: no `UPDATE`,
 create-database or create-role attributes.
 
 1. Load the data as the owner (`python src/load_data.py`, above).
-2. Set `APP_DB_USER` and `APP_DB_PASSWORD` in `.env` (see `.env.example`).
+2. Set `APP_DB_USER` and `APP_DB_PASSWORD` in `.env`.
 3. Create or update the role as the owner. The inline `DB_USER`/`DB_PASSWORD`
    override `.env`; replace `your_owner_role` with the owner's name. It prints
    the statements it ran, with the password masked, and is safe to re-run:
@@ -164,59 +179,17 @@ Local authentication note: Postgres.app trusts local connections, so the app
 role's password isn't checked locally. Its privileges still are: any statement
 outside `SELECT`/`INSERT` fails with "permission denied".
 
-## Configure PostgreSQL
-
-1. Create two databases: one for the app and one for the tests. The test
-   database's name must end in `_test`; the test suite refuses to run
-   against anything else, which protects your app data.
-   ```
-   createdb jhu_module4
-   createdb jhu_module4_test
-   ```
-2. Create `module_4/.env` (it is git-ignored):
-   ```
-   DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/jhu_module4
-   TEST_DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/jhu_module4_test
-   ```
-   The password is optional for local trust authentication
-   (`postgresql://USER@localhost:5432/jhu_module4`). A variable already set
-   in the environment takes precedence over `.env`.
-3. Load the bundled dataset (`module_4/data/llm_extend_applicant_data_full.json.gz`,
-   the cleaned Module 2 data, gzipped from 50.5 MB to 4.0 MB). This creates
-   the `applicants` table if needed:
-   ```
-   cd module_4
-   python src/load_data.py
-   ```
-   To load a different file, pass its path (`.json` or `.json.gz`):
-   `python src/load_data.py path/to/data.json`. If PostgreSQL isn't
-   reachable, the loader exits with status 1 and says what to check.
-
-### Expected results after a fresh load
-
-`load_data.py` should report `Inserted: 60024`, `Skipped duplicates: 0`,
-`Failed to parse: 1`. The bundled file holds 60,025 records: 60,024 have a
-unique URL and are inserted, and one has no URL (0-based record index 13125) and is
-skipped, because the URL is the table's natural key. There are no duplicate
-URLs in the file. The page then shows Fall 2026 applicant count (Q1)
-= **32,344**, Q7 = 20, Q8 = 30, Q9 = 26.
-
-The development database used for Module 3 shows 60,030 rows and Q1 =
-32,345. Those 6 extra rows are not in the bundled file: they were added to
-that database separately (for example by later Pull Data runs). Their per-question footprint matches
-exactly (1 Fall 2026 row, 6 rows with a nationality classification, 4 PhD
-rows). So a fresh load reproduces the dataset, not those later additions.
-
 ## Run the Flask app
 
-From `module_4/`:
+From `module_5/`:
 
 ```
 python src/flask_app.py
 ```
 
 Then open http://127.0.0.1:5000/ (the page is also served at `/analysis`).
-On an empty database the page shows "N/A" answers instead of failing.
+On an empty database the page shows "N/A" answers instead of failing. Set
+`FLASK_DEBUG=1` for the debugger; it is off by default.
 
 ### Pull Data and Update Analysis
 
@@ -231,9 +204,7 @@ shown on the page (see "Last pull" below).
 **Newest entries first.** Every pull starts at the first (newest) results
 page and keeps only entries whose URL is not already in the database. It
 stops at the first page whose entries are all already loaded, once 300 new
-entries have been collected, or at the end of pagination. Pulls never
-resume from where an earlier pull left off, so repeated pulls stay cheap
-and always pick up what's new.
+entries have been collected, or at the end of pagination.
 
 **Crash handling.** If the browser session crashes mid-pull, the scraper
 re-attaches and retries the page that failed, keeping what it already
@@ -246,9 +217,7 @@ Analysis both answer HTTP 409 (`{"busy": true}`), and the page shows a
 
 **Last pull.** Every pull, successful or not, records its outcome in
 `src/_pull_data_result.json` (not committed). The page shows it under the
-buttons: "Last pull succeeded: N new rows (finished …)", "Last pull failed:
-<reason> (finished …)", or "No pull has run yet." The same information is
-available as JSON:
+buttons, and the same information is available as JSON:
 
 ```
 GET /pull-status
@@ -263,6 +232,28 @@ GET /pull-status
 Analysis (the time is shown under the buttons). After a pull finishes,
 click Update Analysis to recompute the numbers with the new rows.
 
+### `GET /api/applicants`
+
+Returns applicant rows as JSON (a fixed column list; the free-text
+`comments` column is never returned), on a read-only connection.
+
+| Parameter | Accepted values | Default |
+|---|---|---|
+| `limit` | An integer; clamped to 1–100 (`0` → 1, `500` → 100) | 10 |
+| `sort` | `p_id`, `date_added`, `gpa`, `gre`, `university`, `program` | `p_id` |
+| `order` | `asc`, `desc` | `asc` |
+| `university` | Substring match on the standardized university name, at most 100 characters; `%`, `_` and `\` match literally | none |
+
+```
+GET /api/applicants?limit=5&sort=gpa&order=desc&university=Johns%20Hopkins
+{"count": 5, "limit": 5, "sort": "gpa", "order": "desc", "rows": [...]}
+```
+
+A non-integer `limit`, an unknown `sort` or `order`, or a `university`
+filter over 100 characters returns **400** with `{"error": "..."}`; no SQL
+is built. A database that is unreachable, a missing table, or a permission
+error returns **503**.
+
 ## Run the tests
 
 From the **repository root**:
@@ -272,8 +263,10 @@ pytest -c module_5/pytest.ini module_5/tests
 ```
 
 * The run enforces 100% statement coverage of `module_5/src`
-  (`--cov-fail-under=100` in `pytest.ini`) and prints a per-file report.
-* Tests use `TEST_DATABASE_URL` only, never the app database.
+  (`--cov-fail-under=100` in `pytest.ini`) and prints a per-file report;
+  `coverage_summary.txt` is a saved copy of that report.
+* Tests use `TEST_DATABASE_URL` only, never the app database, and never read
+  the developer's `.env` beyond that one value.
 * Every test carries at least one marker: `web`, `buttons`, `analysis`, `db`,
   `integration`. Run one group with, for example,
   `pytest -c module_5/pytest.ini -m buttons module_5/tests` (a partial run
@@ -285,20 +278,17 @@ pytest -c module_5/pytest.ini module_5/tests
 * CI runs that command on every push and pull request to `main`; see
   [Continuous integration](#continuous-integration).
 
-## Documentation
+## Pylint
 
-Published on Read the Docs: **https://jhu-software-concepts-vtalbot1.readthedocs.io**
-
-It covers setup, architecture, the API reference (with the HTTP routes),
-the testing guide, operational notes, troubleshooting and known issues.
-
-The built HTML is also committed at `module_4/docs/build/html/`; open
-`module_4/docs/build/html/index.html` in a browser. To rebuild it, from the
-repository root (warnings are treated as errors):
+From `module_5/` (the saved output is `pylint_report.txt`, 10.00/10):
 
 ```
-sphinx-build -W --keep-going -b html module_4/docs/source module_4/docs/build/html
+python -m pylint src
 ```
+
+No Pylint checks are disabled. Exceptions are caught by specific type only
+(no bare `except:` or `except Exception`), and every handler logs the error
+and returns a specific response or exit code.
 
 ## Dependency graph
 
@@ -335,7 +325,13 @@ Prerequisite: Snyk ignores the `os_name == 'nt'` markers on two
 Windows-only entries in the lock and stops with "Missing required packages"
 unless they are installed, so install them into the venv first:
 `uv pip install cffi==2.1.1 pycparser==3.0 --python venv/bin/python`.
-The saved output is `module_5/snyk_test_output.txt`.
+The saved output is `module_5/snyk_test_output.txt` (64 dependencies, 0
+issues).
+
+Snyk Code (static analysis) runs with `snyk code test src` and
+`snyk code test tests`; the saved output is `snyk_code_output.txt`. Its 11
+findings are reviewed in `SNYK_FINDINGS.md`: all are false positives, left
+open rather than ignored.
 
 ## Continuous integration
 
@@ -359,58 +355,19 @@ the one that executes. `module_5/.github/workflows/ci.yml` is an identical
 copy kept for the expected module layout; the `pylint` job compares the two
 and fails if they differ. The Module 4 workflow, `tests.yml`, is unchanged.
 
----
+## Documentation
 
-# Module 3 — Raw SQL vs. SQLAlchemy Comparison (Part 7)
+The published Read the Docs site
+(https://jhu-software-concepts-vtalbot1.readthedocs.io) still builds the
+**Module 4** documentation (`.readthedocs.yaml` points at `module_4/docs`).
 
-This section compares the raw-SQL and SQLAlchemy (ORM) implementations of **Question 9**: "Repeat Question 8, but identify the university and program using `llm_generated_program`/`llm_generated_university` instead of the original downloaded fields." Q9 was chosen because its regex-based, word-boundary university/program matching required dropping into PostgreSQL's `~*` operator on both sides, making it a concrete case where the two approaches diverge.
+`module_5/docs/source/` is the Module 4 documentation carried forward: its
+API pages autodoc the `module_5/src` code, but its text has not been
+updated for Module 5 (there are no pages yet for `applicant_search`,
+`sql_utils`, `models`, `setup_roles` or `/api/applicants`; this README and
+the report cover them). To build it locally, from the repository root
+(warnings are treated as errors):
 
-## Raw SQL (`query_data.py`)
-
-```python
-def q9(cur):
-    """Same as Q8, but university/program matched via the LLM-generated fields."""
-    university_clause = " OR ".join(
-        "llm_generated_university ~* %s" for _ in Q8_Q9_UNIVERSITIES
-    )
-    params = [pattern for _, pattern in Q8_Q9_UNIVERSITIES]
-    cur.execute(
-        f"""
-        SELECT COUNT(*) FROM applicants
-        WHERE term = 'Fall 2026'
-          AND status = 'Accepted'
-          AND degree = 'PhD'
-          AND llm_generated_program ~* %s
-          AND ({university_clause})
-        """,
-        [CS_PATTERN] + params,
-    )
-    return cur.fetchone()[0]
 ```
-
-## SQLAlchemy (`orm_queries.py`)
-
-```python
-def orm_q9(session):
-    """Same as Q8, but university/program matched via the LLM-generated fields."""
-    university_clause = or_(
-        *[
-            Applicant.llm_generated_university.op("~*")(pattern)
-            for _, pattern in Q8_Q9_UNIVERSITIES
-        ]
-    )
-    stmt = select(func.count()).where(
-        and_(
-            Applicant.term == "Fall 2026",
-            Applicant.status == "Accepted",
-            Applicant.degree == "PhD",
-            Applicant.llm_generated_program.op("~*")(CS_PATTERN),
-            university_clause,
-        )
-    )
-    return session.scalar(stmt)
+sphinx-build -W --keep-going -b html module_5/docs/source module_5/docs/build/html
 ```
-
-## Comparison
-
-The SQLAlchemy version's real advantage shows up in the non-regex filters. `Applicant.term == "Fall 2026"`, `Applicant.status == "Accepted"`, and `Applicant.degree == "PhD"` are typed attributes on the `Applicant` model, so a typo'd column name or a type mismatch would be caught before the query ever reaches the database, and the same model would carry over largely unchanged if this project ever moved off PostgreSQL to another SQL backend. The raw-SQL version, by contrast, builds its `WHERE` clause as an f-string with manual `%s` placeholders and a hand-assembled parameter list as the number of dynamic clauses grows. That said, the regex-based university/program matching required falling back to `.op("~*")` on the ORM side anyway. Viewed through that lens the ORM version reads as SQL-with-extra-steps, and arguably the raw-SQL version is more direct and easier to audit at a glance, since the whole filter is visible as one literal query string rather than assembled through `and_()`/`or_()`/`.op()` calls. Overall, for this specific question, the ORM's main benefit was reusing `Q8_Q9_UNIVERSITIES` and `CS_PATTERN` from `query_data.py` unchanged and getting typed-column safety on the simple equality filters, while the regex matching itself was a wash.

@@ -1,6 +1,6 @@
 """Run the analysis questions (Q1-Q9 + 2 custom) with raw SQL against the applicants table.
 
-Every statement is a psycopg2.sql composed object built by a *_query()
+Every statement is a psycopg2.sql composed object built by a ``*_query()``
 function that returns (stmt, params); the q*() functions only execute what
 the builder returns. The table name is sql_utils.APPLICANTS (an
 sql.Identifier), runtime-chosen column names are sql.Identifier, every value
