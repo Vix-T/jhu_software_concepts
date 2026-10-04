@@ -12,6 +12,13 @@ guards enforce that:
   never overrides a variable already set in the environment). The original
   values are restored when the run ends.
 
+The developer's own module_5/.env never reaches the code under test:
+config.load_dotenv skips that one file for the whole run (any other path,
+such as a test's temporary .env, loads normally). Otherwise any keys in it
+beyond the pinned ones would leak into os.environ and could change a
+test's outcome. TEST_DATABASE_URL is the only value the suite takes from it,
+read above with dotenv_values().
+
 The applicants table is created once per session with the application's
 own CREATE_TABLE_SQL and truncated before every test, so each test starts
 from an empty table.
@@ -28,6 +35,7 @@ from psycopg2 import sql
 from selenium.common.exceptions import NoSuchElementException
 from sqlalchemy.engine import make_url
 
+import config as app_config
 import load_data
 from config import db_env
 from flask_app import AppDependencies, create_app
@@ -38,6 +46,13 @@ FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixture
 
 _UNSET = object()
 _saved_db_env = {}
+_real_load_dotenv = app_config.load_dotenv
+
+
+def _load_dotenv_except_developer_env(dotenv_path=None, **kwargs):
+    if dotenv_path is not None and os.path.abspath(dotenv_path) == app_config.ENV_FILE:
+        return False
+    return _real_load_dotenv(dotenv_path, **kwargs)
 
 
 def _read_test_database_url():
@@ -72,9 +87,11 @@ def pytest_configure(config):
     for name in test_env:
         _saved_db_env[name] = os.environ.get(name, _UNSET)
     os.environ.update(test_env)
+    app_config.load_dotenv = _load_dotenv_except_developer_env
 
 
 def pytest_unconfigure(config):
+    app_config.load_dotenv = _real_load_dotenv
     for name, value in _saved_db_env.items():
         if value is _UNSET:
             os.environ.pop(name, None)

@@ -52,7 +52,7 @@ def test_all_settings_build_url_and_dsn(clean_db_env, no_env_file):
     assert (url.host, url.port, url.database, url.username, url.password) == (
         "db.example.internal", 6543, "settings_test", "grader", "s3cret",
     )
-    assert parse_dsn(psycopg2_dsn()) == {
+    assert parse_dsn(psycopg2_dsn(url)) == {
         "host": "db.example.internal",
         "port": "6543",
         "dbname": "settings_test",
@@ -85,6 +85,14 @@ def test_all_missing_settings_are_listed(clean_db_env, no_env_file):
         get_db_url(env_file=no_env_file)
 
 
+@pytest.mark.usefixtures("clean_db_env")
+def test_developer_env_file_is_not_read_during_tests():
+    """conftest keeps module_5/.env out of the run, so the default env_file
+    finds nothing whatever a developer's .env contains."""
+    with pytest.raises(ConfigError, match=r"setting\(s\): DB_HOST, DB_NAME, DB_USER\. "):
+        get_db_url()
+
+
 @pytest.mark.parametrize("port", [None, ""])
 def test_port_defaults_to_5432(clean_db_env, no_env_file, port):
     _set(clean_db_env, FULL_SETTINGS)
@@ -94,8 +102,9 @@ def test_port_defaults_to_5432(clean_db_env, no_env_file, port):
         clean_db_env.setenv("DB_PORT", port)
 
     assert DEFAULT_PORT == 5432
-    assert get_db_url(env_file=no_env_file).port == 5432
-    assert parse_dsn(psycopg2_dsn())["port"] == "5432"
+    url = get_db_url(env_file=no_env_file)
+    assert url.port == 5432
+    assert parse_dsn(psycopg2_dsn(url))["port"] == "5432"
 
 
 def test_non_integer_port_raises(clean_db_env, no_env_file):
@@ -116,7 +125,7 @@ def test_password_may_be_empty(clean_db_env, no_env_file, password):
     url = get_db_url(env_file=no_env_file)
     assert url.password is None
     assert url.render_as_string(hide_password=False).startswith("postgresql+psycopg2://grader@")
-    dsn = parse_dsn(psycopg2_dsn())
+    dsn = parse_dsn(psycopg2_dsn(url))
     assert "password" not in dsn
     assert dsn["dbname"] == "settings_test"
 
@@ -134,7 +143,7 @@ def test_special_characters_in_password_are_escaped(clean_db_env, no_env_file):
     assert reparsed.password == SPECIAL_PASSWORD
     assert (reparsed.host, reparsed.database) == ("db.example.internal", "settings_test")
 
-    dsn = parse_dsn(psycopg2_dsn())
+    dsn = parse_dsn(psycopg2_dsn(url))
     assert dsn["password"] == SPECIAL_PASSWORD
     assert dsn["dbname"] == "settings_test"
     assert dsn["user"] == "grader"
