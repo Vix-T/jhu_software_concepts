@@ -268,23 +268,22 @@ click Update Analysis to recompute the numbers with the new rows.
 From the **repository root**:
 
 ```
-pytest -c module_4/pytest.ini module_4/tests
+pytest -c module_5/pytest.ini module_5/tests
 ```
 
-* The run enforces 100% statement coverage of `module_4/src`
-  (`--cov-fail-under=100` in `pytest.ini`) and prints a per-file report;
-  `module_4/coverage_summary.txt` is a saved copy of that output.
+* The run enforces 100% statement coverage of `module_5/src`
+  (`--cov-fail-under=100` in `pytest.ini`) and prints a per-file report.
 * Tests use `TEST_DATABASE_URL` only, never the app database.
 * Every test carries at least one marker: `web`, `buttons`, `analysis`, `db`,
   `integration`. Run one group with, for example,
-  `pytest -c module_4/pytest.ini -m buttons module_4/tests` (a partial run
+  `pytest -c module_5/pytest.ini -m buttons module_5/tests` (a partial run
   reports a coverage failure; only the full suite reaches 100%). The
   command CI runs selects every marker, which is the entire suite:
   ```
-  pytest -c module_4/pytest.ini -m "web or buttons or analysis or db or integration" module_4/tests
+  python -m pytest -c module_5/pytest.ini -m "web or buttons or analysis or db or integration" module_5/tests
   ```
-* CI: `.github/workflows/tests.yml` runs that command on every push and pull
-  request to `main`, against a PostgreSQL 16 service container.
+* CI runs that command on every push and pull request to `main`; see
+  [Continuous integration](#continuous-integration).
 
 ## Documentation
 
@@ -337,6 +336,28 @@ Windows-only entries in the lock and stops with "Missing required packages"
 unless they are installed, so install them into the venv first:
 `uv pip install cffi==2.1.1 pycparser==3.0 --python venv/bin/python`.
 The saved output is `module_5/snyk_test_output.txt`.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` (repository root) runs four jobs on every push
+and pull request to `main` (and on demand from the Actions tab), each on
+Ubuntu 24.04 with Python 3.12 and `module_5/requirements.txt`:
+
+| Job | What it checks |
+|---|---|
+| `pylint` | `python -m pylint src --fail-under=10` from `module_5/`; it also fails if the two workflow copies differ |
+| `dependency-graph` | Installs Graphviz, runs the pydeps command above, fails unless `dependency.svg` exists and has nodes, and uploads it as an artifact |
+| `snyk` | `snyk test` (fails on high or critical issues), then `snyk code test src` as a report only (its findings are the documented false positives in `SNYK_FINDINGS.md`) |
+| `pytest` | The full suite against a PostgreSQL 16 service container, with 100% coverage enforced |
+
+The `snyk` job needs a repository secret named `SNYK_TOKEN` (Settings >
+Secrets and variables > Actions) holding a Snyk API token; without it the
+job stops with an error naming the missing secret.
+
+GitHub only runs workflows from the repository root, so the root copy is
+the one that executes. `module_5/.github/workflows/ci.yml` is an identical
+copy kept for the expected module layout; the `pylint` job compares the two
+and fails if they differ. The Module 4 workflow, `tests.yml`, is unchanged.
 
 ---
 
