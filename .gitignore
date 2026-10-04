@@ -71,3 +71,6 @@ module_4/CLAUDE.md
 module_5/CLAUDE.md
 module_5/venv/
 module_5/docs/build/html/.doctrees/
+
+# setuptools metadata from the editable install (pip/uv install -e .)
+*.egg-info/
