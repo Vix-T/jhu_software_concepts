@@ -301,6 +301,28 @@ repository root (warnings are treated as errors):
 sphinx-build -W --keep-going -b html module_4/docs/source module_4/docs/build/html
 ```
 
+## Dependency graph
+
+`module_5/dependency.svg` is the import graph of the Flask app, generated
+with pydeps (from `requirements.txt`) and Graphviz (`dot` must be on
+`PATH`; on Ubuntu, `sudo apt-get install graphviz`). From `module_5/`:
+
+```
+pydeps src/flask_app.py --noshow -T svg -o dependency.svg --max-module-depth 1 --rankdir TB --only applicant_search busy_state config flask_app load_data models orm_queries pull_data query_data scrape sql_utils flask psycopg2 sqlalchemy dotenv selenium bs4
+```
+
+* `--max-module-depth 1` collapses each package to one node
+  (`sqlalchemy.orm`, `sqlalchemy.sql`, ... become `sqlalchemy`).
+* `--rankdir TB` draws the layers top to bottom: third-party packages,
+  then the database and config helpers, then the services, then
+  `flask_app.py`.
+* `--only` keeps the `src` modules and the six key third-party packages,
+  dropping the transitive ones (werkzeug, jinja2, greenlet, urllib3, ...).
+  A new `src` module must be added to this list to appear in the graph.
+
+`setup_roles.py` is not in the graph: it is a standalone command-line
+script that the app never imports.
+
 ---
 
 # Module 3 — Raw SQL vs. SQLAlchemy Comparison (Part 7)
