@@ -323,6 +323,21 @@ pydeps src/flask_app.py --noshow -T svg -o dependency.svg --max-module-depth 1 -
 `setup_roles.py` is not in the graph: it is a standalone command-line
 script that the app never imports.
 
+## Security scan
+
+The dependencies are scanned with the Snyk CLI (`snyk auth` first). From
+`module_5/`, with the virtual environment synced from `requirements.txt`:
+
+```
+snyk test --file=requirements.txt --package-manager=pip --command=venv/bin/python
+```
+
+Prerequisite: Snyk ignores the `os_name == 'nt'` markers on two
+Windows-only entries in the lock and stops with "Missing required packages"
+unless they are installed, so install them into the venv first:
+`uv pip install cffi==2.1.1 pycparser==3.0 --python venv/bin/python`.
+The saved output is `module_5/snyk_test_output.txt`.
+
 ---
 
 # Module 3 — Raw SQL vs. SQLAlchemy Comparison (Part 7)

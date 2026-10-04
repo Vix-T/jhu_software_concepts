@@ -1,0 +1,19 @@
+
+Testing  (requirements.txt) ...
+                                                                     
+✔ Tested 64 dependencies for known issues, no vulnerable paths found.
+                                                                     
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Test Summary                                                                                                             │
+│                                                                                                                          │
+│   Organization:      vix-t                                                                                               │
+│   Test type:         open-source                                                                                         │
+│   Project path:      /Users/vixedwards/Documents/JohnsHopkinsCourses/EN.605.256.82/Git/jhu_software_concepts/module_5    │
+│                                                                                                                          │
+│   Total issues: 0                                                                                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+💡 Tip
+
+   To view ignored issues, use the --include-ignores option.
+                                                            
+

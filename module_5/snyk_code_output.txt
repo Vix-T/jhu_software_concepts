@@ -1,0 +1,106 @@
+$ snyk code test src
+
+Testing src ...
+
+Open Issues
+
+ ✗ [LOW] Path Traversal
+   Finding ID: fab2f4c1-5f88-4813-a7b9-44a2f078563f
+   Path: flask_app.py, line 226
+   Info: Unsanitized input from an environment variable flows into os.replace, where it is used as a path. This may result in a Path Traversal vulnerability and allow an attacker to write arbitrary files.
+
+ ✗ [LOW] Path Traversal
+   Finding ID: 828f480f-f315-456c-8e6d-7fb59f578ca1
+   Path: flask_app.py, line 281
+   Info: Unsanitized input from an environment variable flows into os.replace, where it is used as a path. This may result in a Path Traversal vulnerability and allow an attacker to write arbitrary files.
+
+ ✗ [LOW] Path Traversal
+   Finding ID: d15ba836-abb3-463e-8024-eda28725bf2f
+   Path: flask_app.py, line 287
+   Info: Unsanitized input from an environment variable flows into os.replace, where it is used as a path. This may result in a Path Traversal vulnerability and allow an attacker to write arbitrary files.
+
+ ✗ [LOW] Path Traversal
+   Finding ID: e455b149-e86c-4e05-970e-2fc5e947ebbe
+   Path: flask_app.py, line 304
+   Info: Unsanitized input from an environment variable flows into os.replace, where it is used as a path. This may result in a Path Traversal vulnerability and allow an attacker to write arbitrary files.
+
+ ✗ [LOW] Path Traversal
+   Finding ID: e50725b8-0fa1-4502-ae86-eff211151ada
+   Path: flask_app.py, line 308
+   Info: Unsanitized input from an environment variable flows into os.replace, where it is used as a path. This may result in a Path Traversal vulnerability and allow an attacker to write arbitrary files.
+
+ ✗ [LOW] Path Traversal
+   Finding ID: 229a0cfa-5db8-4d80-ba7e-e4d9b5f5062f
+   Path: flask_app.py, line 314
+   Info: Unsanitized input from an environment variable flows into os.replace, where it is used as a path. This may result in a Path Traversal vulnerability and allow an attacker to write arbitrary files.
+
+ ✗ [LOW] Path Traversal
+   Finding ID: 051582aa-4df9-406b-92f1-724e988cdf96
+   Path: pull_data.py, line 179
+   Info: Unsanitized input from an environment variable flows into os.replace, where it is used as a path. This may result in a Path Traversal vulnerability and allow an attacker to write arbitrary files.
+
+ ✗ [HIGH] SQL Injection
+   Finding ID: 9b7c602d-5638-47c8-badb-c116e3f8d463
+   Path: flask_app.py, line 348
+   Info: Unsanitized input from an HTTP parameter flows into execute, where it is used in an SQL query. This may result in an SQL Injection vulnerability.
+
+
+
+╭────────────────────────────────────────────────────╮
+│ Test Summary                                       │
+│                                                    │
+│   Organization:      vix-t                         │
+│   Test type:         Static code analysis          │
+│   Project path:      src                           │
+│                                                    │
+│   Total issues:   8                                │
+│   Ignored issues: 0 [ 0 HIGH  0 MEDIUM  0 LOW ]    │
+│   Open issues:    8 [ 1 HIGH  0 MEDIUM  7 LOW ]    │
+╰────────────────────────────────────────────────────╯
+    
+💡 Tip
+
+   To view ignored issues, use the --include-ignores option.
+                                                            
+
+
+$ snyk code test tests
+
+Testing tests ...
+
+Open Issues
+
+ ✗ [LOW] Use of Hardcoded Passwords
+   Finding ID: c62d5318-71b5-4bc8-958e-d453496f5e70
+   Path: test_config.py, line 18
+   Info: Do not hardcode passwords in code. Found hardcoded password used in a dictionary key.
+
+ ✗ [LOW] Use of Hardcoded Passwords
+   Finding ID: d6ed1d74-b493-4a2e-ad35-d7c65eb6aa76
+   Path: test_config.py, line 60
+   Info: Do not hardcode passwords in code. Found hardcoded password used in a dictionary key.
+
+ ✗ [LOW] Use of Hardcoded Passwords
+   Finding ID: 51017b73-9500-4c3d-928a-52edec11e3e0
+   Path: test_config.py, line 134
+   Info: Do not hardcode passwords in code. Found hardcoded password used in a dictionary key.
+
+
+
+╭────────────────────────────────────────────────────╮
+│ Test Summary                                       │
+│                                                    │
+│   Organization:      vix-t                         │
+│   Test type:         Static code analysis          │
+│   Project path:      tests                         │
+│                                                    │
+│   Total issues:   3                                │
+│   Ignored issues: 0 [ 0 HIGH  0 MEDIUM  0 LOW ]    │
+│   Open issues:    3 [ 0 HIGH  0 MEDIUM  3 LOW ]    │
+╰────────────────────────────────────────────────────╯
+    
+💡 Tip
+
+   To view ignored issues, use the --include-ignores option.
+                                                            
+
