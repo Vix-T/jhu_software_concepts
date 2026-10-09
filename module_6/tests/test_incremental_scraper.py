@@ -131,11 +131,13 @@ def fake_chrome(monkeypatch):
     created = []
 
     class FakeChrome:
-        def __init__(self, options):
+        def __init__(self, options, service=None):
             self.options = options
+            self.service = service
             created.append(self)
 
     monkeypatch.setattr(scraper, "ChromeWebDriver", FakeChrome)
+    monkeypatch.delenv("CHROMEDRIVER_PATH", raising=False)
     return created
 
 
@@ -146,6 +148,23 @@ def test_attach_uses_default_debugger_address(monkeypatch, fake_chrome):
 
     assert fake_chrome == [driver]
     assert driver.options.experimental_options == {"debuggerAddress": "127.0.0.1:9222"}
+    assert driver.service is None  # no CHROMEDRIVER_PATH: Selenium Manager finds a driver
+
+
+@pytest.mark.parametrize("value", ["/usr/local/bin/chromedriver", "  /opt/drivers/chromedriver  "])
+def test_attach_uses_the_chromedriver_at_chromedriver_path(monkeypatch, fake_chrome, value):
+    monkeypatch.setenv("CHROMEDRIVER_PATH", value)
+
+    driver = scraper.attach_to_chrome()
+
+    assert isinstance(driver.service, scraper.ChromeService)
+    assert driver.service.path == value.strip()
+
+
+def test_blank_chromedriver_path_is_unset(monkeypatch, fake_chrome):
+    monkeypatch.setenv("CHROMEDRIVER_PATH", "   ")
+
+    assert scraper.attach_to_chrome().service is None
 
 
 @pytest.mark.parametrize("address", ["10.0.0.7:9333", "localhost:9222"])

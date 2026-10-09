@@ -58,7 +58,12 @@ services:
     depends_on: *depends-on-backends
 
   worker:
-    build: ./src/worker
+    build:
+      context: ./src/worker
+      args:
+        # Match your Chrome's major version (chrome://version); exact versions:
+        # https://googlechromelabs.github.io/chrome-for-testing/
+        CHROMEDRIVER_VERSION: ${CHROMEDRIVER_VERSION:-154.0.8037.92}
     environment:
       DATABASE_URL: *database-url
       RABBITMQ_URL: *rabbitmq-url

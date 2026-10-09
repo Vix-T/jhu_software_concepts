@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from bs4 import BeautifulSoup
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.chrome.webdriver import WebDriver as ChromeWebDriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
@@ -44,6 +45,9 @@ logger = logging.getLogger(__name__)
 
 DEBUGGER_ENV = "CHROME_DEBUGGER_ADDRESS"
 DEFAULT_DEBUGGER_ADDRESS = "127.0.0.1:9222"
+# Path to a chromedriver binary (the worker image bakes one in). Unset: Selenium
+# Manager locates or downloads a driver itself.
+CHROMEDRIVER_ENV = "CHROMEDRIVER_PATH"
 # Seconds the pre-flight connect to the debugger port may take.
 PORT_CHECK_TIMEOUT = 3
 # Upper bound on new entries collected by one scrape, so a single task stays
@@ -508,11 +512,17 @@ def debugger_address():
 
 
 def attach_to_chrome():
-    """Default driver factory: attach to the already-running, verified Chrome session."""
+    """Default driver factory: attach to the already-running, verified Chrome session.
+
+    With $CHROMEDRIVER_PATH set, that chromedriver is used as-is, so Selenium
+    Manager never runs (and never downloads anything).
+    """
     host, port = debugger_address()
     options = Options()
     options.add_experimental_option("debuggerAddress", f"{host}:{port}")
-    return ChromeWebDriver(options=options)
+    driver_path = os.environ.get(CHROMEDRIVER_ENV, "").strip()
+    service = ChromeService(executable_path=driver_path) if driver_path else None
+    return ChromeWebDriver(options=options, service=service)
 
 
 def _debugger_port_open(host, port):
