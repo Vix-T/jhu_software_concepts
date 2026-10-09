@@ -51,6 +51,8 @@ services:
       start_period: 20s
 
   web:
+    # Published at Docker Hub; `docker compose up --build` still builds it locally.
+    image: ${DOCKERHUB_USER:-vixbot}/module_6:web-v1
     build: ./src/web
     environment:
       # Until the worker has created this role (first start), the web answers 503.
@@ -62,6 +64,7 @@ services:
     depends_on: *depends-on-backends
 
   worker:
+    image: ${DOCKERHUB_USER:-vixbot}/module_6:worker-v1
     build:
       context: ./src/worker
       args:
