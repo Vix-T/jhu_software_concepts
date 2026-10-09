@@ -1,0 +1,7 @@
+# Runtime dependencies of the web service (imported by run.py, publisher.py, app/).
+# requirements.txt is the pinned lock for the python:3.11-slim image; regenerate it
+# from module_6/ (pins constrained to the root lock the tests run against) with:
+#   uv pip compile --python venv/bin/python --python-version 3.11 --universal -c requirements.txt src/web/requirements.in -o src/web/requirements.txt
+Flask==3.1.3
+psycopg2-binary==2.9.13
+pika==1.4.4

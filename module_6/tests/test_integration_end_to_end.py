@@ -85,7 +85,7 @@ def test_pull_data_end_to_end(client, broker, channel, db_conn, tmp_path):
     assert after["watermark_updated_at"] > before["watermark_updated_at"]
     text = _page_text(client)
     assert "Fall 2026 applicant count: 7" in text  # all 7 rows are Fall 2026, the new ones included
-    assert "Data last pulled: never" not in text
+    assert "Data last updated: never" not in text
     api = client.get("/api/applicants", query_string={"sort": "p_id", "order": "desc", "limit": "2"}).get_json()
     assert [row["url"] for row in api["rows"]] == [result_url(5009), result_url(5010)]
 

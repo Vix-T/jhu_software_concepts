@@ -7,7 +7,7 @@ attrs==26.1.0
     #   outcome
     #   trio
 beautifulsoup4==4.15.0
-    # via -r requirements.in
+    # via -r src/worker/requirements.in
 blinker==1.9.0
     # via flask
 certifi==2026.7.22
@@ -25,9 +25,7 @@ coverage==7.16.2
 dill==0.4.1
     # via pylint
 flask==3.1.3
-    # via -r requirements.in
-greenlet==3.5.6 ; platform_machine == 'AMD64' or platform_machine == 'WIN32' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'ppc64le' or platform_machine == 'win32' or platform_machine == 'x86_64'
-    # via sqlalchemy
+    # via -r src/web/requirements.in
 h11==0.16.0
     # via wsproto
 idna==3.20
@@ -56,7 +54,9 @@ outcome==1.3.0.post0
 packaging==26.3
     # via pytest
 pika==1.4.4
-    # via -r requirements.in
+    # via
+    #   -r src/web/requirements.in
+    #   -r src/worker/requirements.in
 platformdirs==4.12.3
     # via pylint
 pluggy==1.6.0
@@ -64,7 +64,9 @@ pluggy==1.6.0
     #   pytest
     #   pytest-cov
 psycopg2-binary==2.9.13
-    # via -r requirements.in
+    # via
+    #   -r src/web/requirements.in
+    #   -r src/worker/requirements.in
 pycparser==3.0 ; implementation_name != 'PyPy' and implementation_name != 'pypy' and os_name == 'nt'
     # via cffi
 pygments==2.21.0
@@ -82,15 +84,13 @@ pytest-cov==7.1.0
 python-dotenv==1.2.3
     # via -r requirements.in
 selenium==4.48.0
-    # via -r requirements.in
+    # via -r src/worker/requirements.in
 sniffio==1.3.1
     # via trio
 sortedcontainers==2.4.0
     # via trio
 soupsieve==2.10
     # via beautifulsoup4
-sqlalchemy==2.0.54
-    # via -r requirements.in
 tomli==2.5.0 ; python_full_version <= '3.11'
     # via coverage
 tomlkit==0.15.1
@@ -105,7 +105,6 @@ typing-extensions==4.16.0
     # via
     #   beautifulsoup4
     #   selenium
-    #   sqlalchemy
 urllib3==2.8.0
     # via selenium
 websocket-client==1.9.2

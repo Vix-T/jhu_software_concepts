@@ -1,0 +1,80 @@
+# Grad Cafe analytics: PostgreSQL, RabbitMQ, the Flask web service and the worker.
+#
+#   docker compose up --build        (from module_6/)
+#
+# Every setting has a development default, so a clean clone starts with no .env.
+# The defaults are dev-only credentials; override them through the environment
+# (or a .env next to this file) for anything shared.
+
+x-database-url: &database-url "postgresql://${POSTGRES_USER:-gradcafe}:${POSTGRES_PASSWORD:-gradcafe_dev_only}@db:5432/${POSTGRES_DB:-gradcafe}"
+x-rabbitmq-url: &rabbitmq-url "amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/%2F"
+
+x-depends-on-backends: &depends-on-backends
+  db:
+    condition: service_healthy
+  rabbitmq:
+    condition: service_healthy
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gradcafe}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gradcafe_dev_only}
+      POSTGRES_DB: ${POSTGRES_DB:-gradcafe}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # No published port: host port 5432 is Postgres.app's. The services reach it as db:5432.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "15672:15672"  # management UI and API
+    healthcheck:
+      # Healthy only once the listeners (AMQP 5672) accept connections; `ping` passes
+      # earlier, while the node boots, and the worker would hit "connection refused".
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  web:
+    build: ./src/web
+    environment:
+      DATABASE_URL: *database-url
+      RABBITMQ_URL: *rabbitmq-url
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "8080:8080"
+    depends_on: *depends-on-backends
+
+  worker:
+    build: ./src/worker
+    environment:
+      DATABASE_URL: *database-url
+      RABBITMQ_URL: *rabbitmq-url
+      SEED_JSON: /data/applicant_data.json
+      # Chrome with remote debugging on the host; resolved to an IP before attaching.
+      CHROME_DEBUGGER_ADDRESS: ${CHROME_DEBUGGER_ADDRESS:-host.docker.internal:9222}
+      # load_data.py, sql_utils.py and setup_roles.py come from the read-only db mount.
+      PYTHONPATH: /app/db
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./src/data:/data:ro
+      - ./src/db:/app/db:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on: *depends-on-backends
+
+volumes:
+  pgdata:

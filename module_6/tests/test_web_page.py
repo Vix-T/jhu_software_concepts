@@ -101,7 +101,7 @@ def test_not_computed_yet(client):
     assert len(soup.select('[data-testid="pull-data-btn"]')) == 1
     assert len(soup.select('[data-testid="update-analysis-btn"]')) == 1
     assert "Analysis last updated: never" in _text(response)
-    assert "Data last pulled: never" in _text(response)
+    assert "Data last updated: never" in _text(response)
 
 
 def test_page_renders_stored_summary(client, seed, refresh_summary):
@@ -147,7 +147,7 @@ def test_timestamps_show_last_update_and_last_pull(client, db_conn, refresh_summ
     updated = soup.select_one('[data-testid="analysis-updated"]').get_text(strip=True)
     pulled = soup.select_one('[data-testid="data-pulled"]').get_text(strip=True)
     assert updated == f"Analysis last updated: {computed_at.astimezone(timezone.utc):%Y-%m-%d %H:%M:%S} UTC"
-    assert pulled == f"Data last pulled: {pulled_at.astimezone(timezone.utc):%Y-%m-%d %H:%M:%S} UTC"
+    assert pulled == f"Data last updated: {pulled_at.astimezone(timezone.utc):%Y-%m-%d %H:%M:%S} UTC"
     stamps = soup.select_one('[data-testid="timestamps"]')
     assert stamps["data-computed-at"] == _iso(computed_at)
     assert stamps["data-pulled-at"] == _iso(pulled_at)

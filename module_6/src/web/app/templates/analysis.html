@@ -23,7 +23,7 @@
     <div data-testid="timestamps" data-status-url="{{ url_for('api_status') }}"
          data-computed-at="{{ computed_at_iso or '' }}" data-pulled-at="{{ last_pulled_iso or '' }}">
       <p class="refreshed-at" data-testid="analysis-updated">Analysis last updated: {{ snapshot.computed_at|utc_time }}</p>
-      <p class="refreshed-at" data-testid="data-pulled">Data last pulled: {{ snapshot.last_pulled_at|utc_time }}</p>
+      <p class="refreshed-at" data-testid="data-pulled">Data last updated: {{ snapshot.last_pulled_at|utc_time }}</p>
     </div>
     {% endif %}
   </header>

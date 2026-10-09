@@ -1,19 +1,14 @@
-# Top-level dependencies for module_6. requirements.txt is the fully pinned
-# lock generated from this file; regenerate it with:
+# Development environment for module_6: both services' runtime dependencies plus
+# the test and lint tools. requirements.txt is the fully pinned lock generated from
+# this file (and the service locks are constrained to it); regenerate it with:
 #   uv pip compile --python venv/bin/python --python-version 3.11 --universal requirements.in -o requirements.txt
 
-# Runtime (imported by src/)
-beautifulsoup4==4.15.0
-Flask==3.1.3
-psycopg2-binary==2.9.13
-python-dotenv==1.2.3
-selenium==4.48.0
-SQLAlchemy==2.0.54
+# Runtime (each service's own top-level dependencies)
+-r src/web/requirements.in
+-r src/worker/requirements.in
 
-# Message queue client (web publisher, worker consumer)
-pika==1.4.4
-
-# Testing, linting
+# Testing and linting
+python-dotenv==1.2.3  # tests/conftest.py reads TEST_DATABASE_URL from module_6/.env
 pytest==9.1.1
 pytest-cov==7.1.0
 pylint==4.1.2

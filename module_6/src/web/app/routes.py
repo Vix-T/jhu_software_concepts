@@ -107,7 +107,7 @@ def update_analysis():
 
 
 def api_status():
-    """GET /api/status: when the analysis was computed and data last pulled, and the row count."""
+    """GET /api/status: when the analysis was computed and data last updated, and the row count."""
     try:
         snapshot = read_snapshot(_database_url())
     except DB_READ_ERRORS as exc:

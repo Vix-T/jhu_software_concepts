@@ -99,7 +99,7 @@ def handle_scrape_new_data(conn, payload, browser=None):
         inserted, skipped, failed = load_data.insert_rows(cur, records)
         newest = load_data.highest_result_id(records, failed)
         mark = newest if newest is not None else stored
-        if mark is not None:  # also stamps updated_at: "data last pulled"
+        if mark is not None:  # also stamps updated_at: "Data last updated"
             load_data.advance_watermark(cur, mark)
         query_data.refresh_summary(cur)
     logger.info(
@@ -193,14 +193,19 @@ def on_message(db_conn, channel, method, _properties, body):
 def prepare_database(db_conn):
     """Create/seed the tables, then compute the summary if there is none yet (commits)."""
     seeded = load_data.initialize_database(db_conn)
-    if seeded is not None:
+    logger.info("Schema ready: applicants, ingestion_watermarks, analysis_summary")
+    if seeded is None:
+        logger.info("applicants already has rows: seed skipped")
+    else:
         logger.info("Seeded applicants: %s", seeded)
     with db_conn:
         with db_conn.cursor() as cur:
             cur.execute(SUMMARY_EXISTS_SQL, [clamp_limit(SINGLE_ROW)])
             if cur.fetchone() is None:
-                query_data.refresh_summary(cur)
-                logger.info("Computed the initial analysis summary")
+                summary = query_data.refresh_summary(cur)
+                logger.info("Computed the initial analysis summary (Q1 = %s)", summary["q1_count"])
+            else:
+                logger.info("Analysis summary already present: not recomputed")
 
 
 def broker_parameters():

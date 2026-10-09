@@ -8,6 +8,7 @@ process_message()'s task map (the scraper's browser seam).
 
 import functools
 import json
+import logging
 import os
 import runpy
 
@@ -197,7 +198,8 @@ def seed_json(tmp_path, monkeypatch):
     return path
 
 
-def test_main_prepares_database_then_consumes(broker, seed_json, db_conn, monkeypatch):
+def test_main_prepares_database_then_consumes(broker, seed_json, db_conn, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="consumer")
     state_at_consume = []
     monkeypatch.setenv("RABBITMQ_URL", "amqp://worker:pw@broker.test:5672/%2F")
     broker.deliver({"kind": "recompute_analytics", "payload": {}})
@@ -210,6 +212,9 @@ def test_main_prepares_database_then_consumes(broker, seed_json, db_conn, monkey
     consumer.main()
 
     assert state_at_consume == [(3, 1)]  # seeded and summarised before consuming started
+    assert "Schema ready: applicants, ingestion_watermarks, analysis_summary" in caplog.text
+    assert "Seeded applicants: {'inserted': 3, 'skipped': 0, 'failed': 0, 'watermark': 102}" in caplog.text
+    assert "Computed the initial analysis summary (Q1 = 3)" in caplog.text
     [conn] = broker.connections
     assert conn.parameters.heartbeat == 600
     assert conn.parameters.host == "broker.test"
@@ -227,7 +232,9 @@ def test_main_prepares_database_then_consumes(broker, seed_json, db_conn, monkey
         assert cur.fetchone()[0] == 102
 
 
-def test_existing_summary_is_not_recomputed_at_startup(broker, db_conn, tables, seed_json, refresh_summary):
+def test_restart_skips_seed_and_keeps_summary(broker, db_conn, seed, seed_json, refresh_summary, caplog):
+    caplog.set_level(logging.INFO, logger="consumer")
+    seed([make_record(0)])
     refresh_summary()
     with db_conn, db_conn.cursor() as cur:
         cur.execute("SELECT computed_at FROM analysis_summary")
@@ -238,6 +245,10 @@ def test_existing_summary_is_not_recomputed_at_startup(broker, db_conn, tables, 
     with db_conn, db_conn.cursor() as cur:
         cur.execute("SELECT computed_at FROM analysis_summary")
         assert cur.fetchone()[0] == before
+    assert _count(db_conn, "applicants") == 1  # the seed file was not loaded
+    assert "applicants already has rows: seed skipped" in caplog.text
+    assert "Analysis summary already present: not recomputed" in caplog.text
+    assert "Seeded applicants" not in caplog.text
 
 
 def test_script_entry_point_runs_main(broker, seed_json):

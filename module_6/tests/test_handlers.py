@@ -108,7 +108,7 @@ def test_repeat_scrape_finds_nothing_new_but_stamps_the_pull(db_conn, known):
     assert (result["scraped"], result["inserted"], result["watermark"]) == (0, 0, 5010)
     [(last_seen, second_pull)] = _watermark(db_conn)
     assert last_seen == 5010
-    assert second_pull > first_pull  # "Data last pulled" moves even when nothing was new
+    assert second_pull > first_pull  # "Data last updated" moves even when nothing was new
 
 
 def test_payload_since_overrides_the_stored_watermark(db_conn, known):

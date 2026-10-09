@@ -1,0 +1,8 @@
+# Runtime dependencies of the worker (consumer.py, etl/, and the db modules mounted at /app/db).
+# requirements.txt is the pinned lock for the python:3.11-slim image; regenerate it
+# from module_6/ (pins constrained to the root lock the tests run against) with:
+#   uv pip compile --python venv/bin/python --python-version 3.11 --universal -c requirements.txt src/worker/requirements.in -o src/worker/requirements.txt
+psycopg2-binary==2.9.13
+pika==1.4.4
+selenium==4.48.0
+beautifulsoup4==4.15.0
