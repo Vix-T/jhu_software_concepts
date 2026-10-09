@@ -192,3 +192,24 @@ def test_cli_entry_point_fails_fast_without_chrome(monkeypatch, capsys, pull_res
     assert attempts == [("127.0.0.1", 9222)]
     assert capsys.readouterr().out == pull_data.CLOUDFLARE_PRECONDITION_MESSAGE + "\n"
     assert _result(pull_result_path)["ok"] is False
+
+
+def test_settle_pending_result_while_pull_runs_is_no_result(tmp_path):
+    path = tmp_path / "result.json"
+    pull_data.write_pull_result(str(path), pull_data.pending_result())
+
+    assert pull_data.settle_pull_result(str(path), running=True) is None
+    assert _result(path)["pending"] is True  # left for the running pull to replace
+
+
+def test_settle_pending_result_after_pull_exits_records_failure(tmp_path, caplog):
+    path = tmp_path / "result.json"
+    pull_data.write_pull_result(str(path), pull_data.pending_result())
+
+    settled = pull_data.settle_pull_result(str(path), running=False)
+
+    assert settled["ok"] is False
+    assert settled["error"] == pull_data.CRASHED_PULL_ERROR
+    assert "pending" not in settled
+    assert _result(path) == settled
+    assert "Pull process ended without a result; recorded as failed" in caplog.text

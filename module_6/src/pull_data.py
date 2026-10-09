@@ -42,7 +42,6 @@ import psycopg2
 from selenium.common.exceptions import WebDriverException
 
 import load_data
-from config import ConfigError
 from scrape import BrowserSettings, ScrapeRetriesExhausted, scrape_newest
 
 logger = logging.getLogger(__name__)
@@ -80,7 +79,7 @@ RECORDED_FAILURES = (
     load_data.TableMissingError,
     psycopg2.Error,
     OSError,
-    ConfigError,
+    load_data.ConfigError,
 )
 
 
@@ -122,7 +121,7 @@ def scrape_new_entries(
     default _debugger_port_open) and PullPreconditionError is raised if
     nothing is listening. A caller-supplied driver_factory skips that check,
     since it doesn't attach to Chrome. is_known(urls) -> set defaults to a
-    lookup in the DB_* database.
+    lookup in the $DATABASE_URL database.
     """
     browser = browser or BrowserSettings()
     if browser.driver_factory is None and not port_check():
@@ -236,7 +235,7 @@ def main(scraper=None, loader=None, result_path=None):
     """CLI entry point; records the outcome in the result file and exits 1 on failure.
 
     scraper/loader default to scrape_new_entries and
-    load_data.load_into_database (DB_* database); result_path defaults to
+    load_data.load_into_database ($DATABASE_URL database); result_path defaults to
     default_result_path().
     """
     result_path = result_path or default_result_path()
@@ -253,7 +252,7 @@ def main(scraper=None, loader=None, result_path=None):
             f"could not attach to Chrome: {exc}".strip(),
             [CLOUDFLARE_PRECONDITION_MESSAGE, f"Underlying error: {exc}"],
         )
-    except RECORDED_FAILURES as exc:  # retries exhausted, database, file/socket, or DB_* settings
+    except RECORDED_FAILURES as exc:  # retries exhausted, database, file/socket, or no DATABASE_URL
         message = f"{type(exc).__name__}: {exc}"
         _fail(result_path, message, [f"PULL FAILED: {message}"])
 

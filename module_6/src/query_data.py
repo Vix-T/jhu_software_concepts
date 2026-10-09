@@ -6,13 +6,15 @@ the builder returns. The table name is sql_utils.APPLICANTS (an
 sql.Identifier), runtime-chosen column names are sql.Identifier, every value
 -- including the fixed filter values below -- is a bound parameter, and every
 SELECT ends in LIMIT %s with a clamp_limit()-ed value.
+
+refresh_summary() runs every question and stores the answers, shaped for
+the web page, in the analysis_summary table (load_data.store_summary).
 """
 
-import psycopg2
 from psycopg2 import sql
 
+import load_data
 from sql_utils import APPLICANTS, MAX_LIMIT, SINGLE_ROW, clamp_limit
-from config import psycopg2_dsn
 
 # Word-boundary (\y) regex patterns, matched case-insensitively (~*).
 # See conversation history / query_results write-up for the false-positive
@@ -408,6 +410,44 @@ def collect_answers(cur):
     return {name: question(cur) for name, question in REPORT_QUESTIONS.items()}
 
 
+def summary_from_answers(answers):
+    """The values the analysis page renders, keyed by template name, from collect_answers()."""
+    summary = {"q1_count": answers["q1"]}
+    summary["q2_num"], summary["q2_denom"], summary["q2_pct"] = answers["q2"]
+    summary["q3"] = answers["q3"]
+    summary["q4_avg"], summary["q4_n"] = answers["q4"]
+    summary["q5_num"], summary["q5_denom"], summary["q5_pct"] = answers["q5"]
+    summary["q6_avg"], summary["q6_n"] = answers["q6"]
+    summary["q7_count"] = answers["q7"]
+    summary["q8_count"] = answers["q8"]
+    summary["q9_count"] = answers["q9"]
+    summary["q8_q9_diff"] = answers["q8"] - answers["q9"]
+    (
+        summary["custom1_contaminated"],
+        summary["custom1_total"],
+        summary["custom1_pct"],
+    ) = answers["custom1"]
+    summary["custom2_rows"] = answers["custom2"]
+    return summary
+
+
+def row_count_query():
+    """Total applicants rows (one aggregate row)."""
+    stmt = sql.SQL("SELECT COUNT(*) FROM {} LIMIT %s").format(APPLICANTS)
+    return stmt, [_one_row_limit()]
+
+
+def refresh_summary(cur):
+    """Recompute every answer and replace the stored analysis_summary row (no commit).
+
+    Returns the stored summary dict.
+    """
+    summary = summary_from_answers(collect_answers(cur))
+    cur.execute(*row_count_query())
+    load_data.store_summary(cur, summary, cur.fetchone()[0])
+    return summary
+
+
 def _print_overview(answers):
     """Q1-Q6: counts, percentages and averages."""
     q2_num, q2_denom, q2_pct = answers["q2"]
@@ -475,8 +515,8 @@ def print_report(answers):
 
 
 def main():
-    """CLI: run every analysis question with raw SQL on the DB_* database; print the answers."""
-    conn = psycopg2.connect(psycopg2_dsn())
+    """CLI: run every analysis question with raw SQL on $DATABASE_URL and print the answers."""
+    conn = load_data.connect()
     try:
         with conn.cursor() as cur:
             answers = collect_answers(cur)

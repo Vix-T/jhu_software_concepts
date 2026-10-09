@@ -7,9 +7,7 @@ both count, while word boundaries still reject look-alikes.
 import pytest
 from conftest import make_record
 
-import orm_queries
 import query_data
-from models import make_session_factory
 
 pytestmark = pytest.mark.analysis
 
@@ -65,7 +63,7 @@ def _school_row(i, university, degree, **overrides):
                              "Masters or PhD": degree, **overrides})
 
 
-def test_short_and_long_forms_both_count(seed, db_conn, test_database_url):
+def test_short_and_long_forms_both_count(seed, db_conn):
     seed([
         # Q7: JHU + Masters + CS, short and long forms.
         _school_row(0, "JHU", "Masters", **{"Semester and Year": "Fall 2025"}),
@@ -81,6 +79,3 @@ def test_short_and_long_forms_both_count(seed, db_conn, test_database_url):
     with db_conn, db_conn.cursor() as cur:
         assert query_data.q7(cur) == 2
         assert query_data.q8(cur) == 2
-    with make_session_factory(test_database_url)() as session:
-        assert orm_queries.q7_jhu_masters_cs(session) == 2
-        assert orm_queries.orm_q8(session) == 2

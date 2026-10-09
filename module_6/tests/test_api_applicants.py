@@ -5,9 +5,8 @@ import socket
 import pytest
 from conftest import make_record, make_records
 
-from applicant_search import RESULT_COLUMNS
-from busy_state import InMemoryBusyState
-from flask_app import AppDependencies, create_app
+from app import create_app
+from app.applicant_search import RESULT_COLUMNS
 
 pytestmark = [pytest.mark.web, pytest.mark.db]
 
@@ -176,14 +175,18 @@ def test_table_survives_injection_attempts(api, seeded, db_conn, row_count):
     assert row_count() == before == len(seeded)
 
 
-def test_fresh_database_without_table_returns_empty_list(make_app, db_conn):
+def test_missing_table_is_503_and_web_does_not_create_it(make_app, db_conn, caplog):
     with db_conn, db_conn.cursor() as cur:
         cur.execute("DROP TABLE applicants")
 
     status, body = _get(make_app().test_client())
 
-    assert status == 200
-    assert body["rows"] == [] and body["count"] == 0
+    assert status == 503
+    assert body == {"error": "database not initialized"}
+    assert "Applicant search: database not initialized" in caplog.text
+    with db_conn, db_conn.cursor() as cur:  # the web never runs DDL: the worker creates tables
+        cur.execute("SELECT to_regclass('applicants')")
+        assert cur.fetchone()[0] is None
 
 
 @pytest.fixture
@@ -192,8 +195,7 @@ def unreachable_api():
         probe.bind(("127.0.0.1", 0))
         closed_port = probe.getsockname()[1]
     app = create_app(
-        {"DB_URL": f"postgresql://nobody@127.0.0.1:{closed_port}/unreachable_test", "TESTING": True},
-        AppDependencies(busy_state=InMemoryBusyState()),
+        {"DATABASE_URL": f"postgresql://nobody@127.0.0.1:{closed_port}/unreachable_test", "TESTING": True}
     )
     return app.test_client()
 
@@ -211,3 +213,17 @@ def test_validation_runs_before_any_database_access(unreachable_api):
 
     assert response.status_code == 400
     assert response.get_json() == {"error": "limit must be an integer"}
+
+
+@pytest.mark.parametrize(
+    ("limit", "expected"),
+    [("99999999999", 100), ("-99999999999", 1), ("0000000000005", 100), ("9" * 5000, 100)],
+)
+def test_limits_too_long_to_parse_clamp_by_sign(api, seed, limit, expected):
+    seed(make_records(105))
+
+    status, body = _get(api, limit=limit)
+
+    assert status == 200
+    assert body["limit"] == expected
+    assert len(body["rows"]) == expected

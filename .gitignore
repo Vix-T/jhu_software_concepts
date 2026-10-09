@@ -77,6 +77,8 @@ module_6/CLAUDE.md
 module_6/.env
 module_6/venv/
 module_6/docs/build/html/.doctrees/
+# Package markers are source: re-include them despite the _*.py scratch-file rule above
+!module_6/src/**/__init__.py
 
 # setuptools metadata from the editable install (pip/uv install -e .)
 *.egg-info/

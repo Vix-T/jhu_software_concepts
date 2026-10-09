@@ -3,11 +3,10 @@
 Run as the database OWNER (the role that owns the database and the
 applicants table, and that ran load_data.py), after the table exists:
 
-    DB_USER=<owner> DB_PASSWORD= python src/setup_roles.py
+    DATABASE_URL=postgresql://<owner>@HOST:PORT/DBNAME python src/setup_roles.py
 
-The DB_* settings (environment first, then module_6/.env) say where to
-connect as the owner; APP_DB_USER / APP_DB_PASSWORD name the app role to
-create. Afterwards, point the app's DB_USER / DB_PASSWORD at the app role.
+DATABASE_URL says where to connect as the owner; APP_DB_USER /
+APP_DB_PASSWORD (environment) name the app role to create.
 
 The app role can only read and add applicant rows:
 
@@ -25,15 +24,21 @@ granting, and re-applies the attributes and password, so it is idempotent
 and always leaves exactly the privileges above.
 """
 
+import os
 import sys
 from dataclasses import dataclass
 
 import psycopg2
 from psycopg2 import sql
 
-from load_data import TABLE_MISSING_MESSAGE, TableMissingError, table_exists_query
+from load_data import (
+    TABLE_MISSING_MESSAGE,
+    ConfigError,
+    TableMissingError,
+    connect,
+    table_exists_query,
+)
 from sql_utils import APPLICANTS_TABLE, SINGLE_ROW, clamp_limit
-from config import ConfigError, get_app_role, psycopg2_dsn
 
 ROLE_ATTRIBUTES = sql.SQL(
     "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT"
@@ -41,6 +46,19 @@ ROLE_ATTRIBUTES = sql.SQL(
 PUBLIC_SCHEMA = "public"
 SERIAL_COLUMN = "p_id"
 PASSWORD_MASK = "********"
+# The app role to create, and its password (read from the environment).
+APP_ROLE_VARS = ("APP_DB_USER", "APP_DB_PASSWORD")
+
+
+def get_app_role():
+    """Return (APP_DB_USER, APP_DB_PASSWORD); ConfigError naming every missing or empty one."""
+    missing = [name for name in APP_ROLE_VARS if not os.environ.get(name)]
+    if missing:
+        raise ConfigError(
+            f"Missing app role setting(s): {', '.join(missing)}. "
+            "Set them in the environment (see .env.example)."
+        )
+    return os.environ["APP_DB_USER"], os.environ["APP_DB_PASSWORD"]
 
 
 @dataclass(frozen=True)
@@ -156,10 +174,10 @@ def apply_role_setup(conn, role, password, table=APPLICANTS_TABLE):
 
 
 def main():
-    """CLI: set up APP_DB_USER as the owner (DB_*); print what ran, password masked."""
+    """CLI: set up APP_DB_USER as the owner ($DATABASE_URL); print what ran, password masked."""
     try:
         role, password = get_app_role()
-        conn = psycopg2.connect(psycopg2_dsn())
+        conn = connect()
     except (ConfigError, psycopg2.OperationalError) as exc:
         print(f"ROLE SETUP FAILED: {str(exc).strip()}")
         sys.exit(1)
@@ -173,7 +191,7 @@ def main():
         sys.exit(1)
     except psycopg2.Error as exc:  # e.g. not the owner: "must be owner of table applicants"
         print(f"ROLE SETUP FAILED: {str(exc).strip().splitlines()[0]}")
-        print("Run setup_roles.py as the database owner (DB_USER/DB_PASSWORD).")
+        print("Run setup_roles.py as the database owner (DATABASE_URL).")
         sys.exit(1)
     finally:
         conn.close()

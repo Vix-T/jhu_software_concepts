@@ -8,7 +8,7 @@
 <body>
   <header>
     <h1>Grad Café Applicant Data — Analysis</h1>
-    <p class="subtitle">SQL/ORM query results from the <code>applicants</code> table, as of the last Update Analysis.</p>
+    <p class="subtitle">SQL query results from the <code>applicants</code> table, computed by the worker at the last Update Analysis.</p>
 
     <div class="actions">
       <button type="button" data-testid="pull-data-btn" data-action-url="{{ url_for('pull_data') }}">Pull Data</button>
@@ -17,24 +17,13 @@
     </div>
 
     <p class="action-status" data-testid="action-status" role="status" aria-live="polite"></p>
+    <div class="status-banner" data-testid="queued-banner" role="status" aria-live="polite" hidden></div>
 
-    {% if refreshed_at %}
-    <p class="refreshed-at">Analysis last updated: {{ refreshed_at }}</p>
-    {% endif %}
-
-    {% if last_result %}
-      {% if last_result.ok %}
-    <p class="last-pull last-pull-ok" data-testid="last-pull">Last pull succeeded: {{ last_result.inserted }} new rows (finished {{ last_result.finished_at }})</p>
-      {% else %}
-    <p class="last-pull last-pull-failed" data-testid="last-pull">Last pull failed: {{ last_result.error|without_failure_prefix }} (finished {{ last_result.finished_at }})</p>
-      {% endif %}
-    {% else %}
-    <p class="last-pull" data-testid="last-pull">No pull has run yet.</p>
-    {% endif %}
-
-    {% if pull_status.running %}
-    <div class="status-banner">
-      A data pull is currently in progress (started {{ pull_status.started_at }}) — numbers below may not include the newest data yet.
+    {% if snapshot %}
+    <div data-testid="timestamps" data-status-url="{{ url_for('api_status') }}"
+         data-computed-at="{{ computed_at_iso or '' }}" data-pulled-at="{{ last_pulled_iso or '' }}">
+      <p class="refreshed-at" data-testid="analysis-updated">Analysis last updated: {{ snapshot.computed_at|utc_time }}</p>
+      <p class="refreshed-at" data-testid="data-pulled">Data last pulled: {{ snapshot.last_pulled_at|utc_time }}</p>
     </div>
     {% endif %}
   </header>
@@ -42,6 +31,8 @@
   <main>
     {% if db_error %}
     <p class="db-unavailable" data-testid="db-unavailable">{{ db_error }}</p>
+    {% elif snapshot.results is none %}
+    <p class="not-computed" data-testid="not-computed">Analysis not computed yet. Click Update Analysis to queue it for the worker.</p>
     {% else %}
     <section class="question">
       <h2>Q1</h2>
@@ -133,21 +124,51 @@
 
   <script>
     (function () {
+      const POLL_INTERVAL_MS = 2000;
+      const MAX_WAIT_MS = 60000;
       const statusEl = document.querySelector('[data-testid="action-status"]');
+      const banner = document.querySelector('[data-testid="queued-banner"]');
+      const stamps = document.querySelector('[data-testid="timestamps"]');
       const buttons = document.querySelectorAll("[data-action-url]");
 
-      const successMessages = {
-        200: (body) =>
-          body.inserted === undefined
-            ? "Analysis updated."
-            : `Pull complete: ${body.inserted} new entries inserted.`,
-        202: () =>
-          "Pull started in the background. Click Update Analysis once it finishes to refresh the numbers.",
-      };
+      function setButtons(disabled) {
+        buttons.forEach((b) => (b.disabled = disabled));
+      }
+
+      // After a 202, poll /api/status until the worker changes either timestamp, then reload.
+      function waitForWorker(task) {
+        banner.hidden = false;
+        banner.textContent = `Request queued: ${task}. Waiting for the worker…`;
+        if (!stamps) {
+          setButtons(false);
+          return;
+        }
+        const before = { computed: stamps.dataset.computedAt, pulled: stamps.dataset.pulledAt };
+        const startedAt = Date.now();
+        const timer = setInterval(async () => {
+          if (Date.now() - startedAt >= MAX_WAIT_MS) {
+            clearInterval(timer);
+            banner.textContent = `Request queued: ${task}. No update after 60 seconds; the worker may still be busy. Reload the page later.`;
+            setButtons(false);
+            return;
+          }
+          try {
+            const response = await fetch(stamps.dataset.statusUrl, { headers: { Accept: "application/json" } });
+            if (!response.ok) return;
+            const status = await response.json();
+            if ((status.computed_at || "") !== before.computed || (status.watermark_updated_at || "") !== before.pulled) {
+              clearInterval(timer);
+              window.location.reload();
+            }
+          } catch (err) {
+            // A failed poll is retried on the next tick.
+          }
+        }, POLL_INTERVAL_MS);
+      }
 
       async function runAction(button) {
-        buttons.forEach((b) => (b.disabled = true));
-        statusEl.textContent = "Working…";
+        setButtons(true);
+        statusEl.textContent = "Sending…";
         let response;
         let body = {};
         try {
@@ -158,20 +179,17 @@
           body = await response.json().catch(() => ({}));
         } catch (err) {
           statusEl.textContent = `Request failed: ${err}`;
-          buttons.forEach((b) => (b.disabled = false));
+          setButtons(false);
           return;
         }
 
-        if (response.status === 409) {
-          statusEl.textContent = "Busy: pull in progress. Please wait and try again.";
-        } else if (successMessages[response.status]) {
-          statusEl.textContent = successMessages[response.status](body);
-          setTimeout(() => window.location.reload(), 1200);
+        if (response.status === 202) {
+          statusEl.textContent = "";
+          waitForWorker(body.task);
           return;
-        } else {
-          statusEl.textContent = `Error (${response.status}): ${body.error || "request failed"}`;
         }
-        buttons.forEach((b) => (b.disabled = false));
+        statusEl.textContent = `Error (${response.status}): ${body.error || "request failed"}`;
+        setButtons(false);
       }
 
       buttons.forEach((button) => button.addEventListener("click", () => runAction(button)));

@@ -4,21 +4,17 @@ The role is TEST_APP_ROLE (gradcafe_app_test, set as APP_DB_USER by
 conftest), never the dev gradcafe_app: roles are cluster-wide.
 """
 
-import json
 import os
 import runpy
 
 import psycopg2
 import psycopg2.errors
 import pytest
-from bs4 import BeautifulSoup
-from conftest import TEST_APP_ROLE, FakeScraper, drop_role, make_records, role_url
-from sqlalchemy.engine import make_url
+from conftest import TEST_APP_ROLE, database_name, drop_role, make_records, role_url
 
 import load_data
 import setup_roles
-from busy_state import InMemoryBusyState
-from flask_app import AppDependencies, create_app
+from app import create_app
 from load_data import TABLE_MISSING_MESSAGE
 
 pytestmark = pytest.mark.db
@@ -45,7 +41,7 @@ def app_role(owner_conn, test_database_url):
 
 @pytest.fixture
 def role_conn(app_role):
-    conn = psycopg2.connect(setup_roles.psycopg2_dsn(app_role[1]))
+    conn = psycopg2.connect(app_role[1])
     yield conn
     conn.close()
 
@@ -159,7 +155,7 @@ def test_role_attributes_and_ownership(app_role, owner_conn, test_database_url):
         cur.execute("SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'applicants'::regclass")
         assert cur.fetchone()[0] != TEST_APP_ROLE
 
-        database = make_url(test_database_url).database
+        database = database_name(test_database_url)
         cur.execute(
             "SELECT has_database_privilege(%(r)s, %(d)s, 'CONNECT'), "
             "has_database_privilege(%(r)s, %(d)s, 'TEMPORARY'), "
@@ -210,53 +206,27 @@ def test_setup_is_idempotent_and_removes_stray_grants(app_role, owner_conn):
 # ---------------------------------------------------------------------------
 
 
-def _role_app(url, **deps):
-    deps.setdefault("busy_state", InMemoryBusyState())
-    return create_app({"DB_URL": url, "TESTING": True}, AppDependencies(**deps))
-
-
-def test_app_works_end_to_end_as_the_role(app_role, seed, row_count, pull_result_path):
+def test_web_search_works_as_the_role(app_role, seed):
     seed(make_records(3))
-    client = _role_app(app_role[1], scraper=FakeScraper(make_records(2, start=100))).test_client()
+    client = create_app({"DATABASE_URL": app_role[1], "TESTING": True}).test_client()
 
-    assert client.get("/").status_code == 200
-    page = client.get("/analysis")
-    assert page.status_code == 200
-    assert "Fall 2026 applicant count: 3" in BeautifulSoup(page.data, "html.parser").get_text(" ", strip=True)
     api = client.get("/api/applicants", query_string={"limit": "2"})
+
     assert api.status_code == 200 and api.get_json()["count"] == 2
 
-    pulled = client.post("/pull-data")  # default loader: INSERTs as the role
-    assert pulled.status_code == 200 and pulled.get_json() == {"ok": True, "inserted": 2}
-    assert row_count() == 5
-    assert client.post("/update-analysis").status_code == 200
-    assert "Fall 2026 applicant count: 5" in BeautifulSoup(
-        client.get("/").data, "html.parser"
-    ).get_text(" ", strip=True)
 
-
-def test_missing_table_as_the_role_is_503(app_role, owner_conn, pull_result_path, caplog):
+def test_role_cannot_create_a_missing_table(app_role, owner_conn, caplog):
     with owner_conn, owner_conn.cursor() as cur:
         cur.execute("DROP TABLE applicants")  # the autouse fixture recreates it for the next test
-    client = _role_app(app_role[1], scraper=FakeScraper(make_records(1))).test_client()
 
-    page = client.get("/")
-    assert page.status_code == 503
-    message = BeautifulSoup(page.data, "html.parser").select_one('[data-testid="db-unavailable"]')
-    assert message.get_text(strip=True) == TABLE_MISSING_MESSAGE
+    with pytest.raises(load_data.TableMissingError, match=TABLE_MISSING_MESSAGE):
+        load_data.load_into_database(make_records(1), app_role[1])
 
-    update = client.post("/update-analysis")
-    assert update.status_code == 503 and update.get_json() == {"ok": False, "error": TABLE_MISSING_MESSAGE}
-    api = client.get("/api/applicants")
-    assert api.status_code == 503 and api.get_json() == {"error": TABLE_MISSING_MESSAGE}
-    pull = client.post("/pull-data")
-    assert pull.status_code == 500 and pull.get_json()["error"] == TABLE_MISSING_MESSAGE
-    assert json.loads(pull_result_path.read_text())["ok"] is False
     assert "Cannot create the applicants table as gradcafe_app_test" in caplog.text
 
 
 # ---------------------------------------------------------------------------
-# The CLI (run as the test DB's owner, the DB_* settings conftest set)
+# The CLI (run as the test DB's owner: the DATABASE_URL conftest set)
 # ---------------------------------------------------------------------------
 
 
@@ -279,7 +249,7 @@ def test_main_sets_up_role_and_masks_password(owner_conn, capsys):
 
 @pytest.mark.parametrize("missing", ["APP_DB_USER", "APP_DB_PASSWORD"])
 def test_main_missing_app_role_settings(monkeypatch, capsys, missing):
-    monkeypatch.setenv(missing, "")  # load_dotenv never overrides a variable that is already set
+    monkeypatch.setenv(missing, "")  # set but empty counts as missing
 
     with pytest.raises(SystemExit) as excinfo:
         setup_roles.main()
@@ -303,8 +273,7 @@ def test_main_without_table_tells_you_to_load_first(owner_conn, capsys):
 
 def test_main_as_a_non_owner_fails_cleanly(app_role, monkeypatch, capsys):
     # Connected as the app role itself: it may not grant anything.
-    monkeypatch.setenv("DB_USER", TEST_APP_ROLE)
-    monkeypatch.setenv("DB_PASSWORD", app_role[0])
+    monkeypatch.setenv("DATABASE_URL", app_role[1])
     monkeypatch.setenv("APP_DB_USER", "gradcafe_app_test_other")
 
     with pytest.raises(SystemExit) as excinfo:
@@ -313,12 +282,11 @@ def test_main_as_a_non_owner_fails_cleanly(app_role, monkeypatch, capsys):
     assert excinfo.value.code == 1
     out = capsys.readouterr().out
     assert out.startswith("ROLE SETUP FAILED: permission denied to create role")
-    assert out.endswith("Run setup_roles.py as the database owner (DB_USER/DB_PASSWORD).\n")
+    assert out.endswith("Run setup_roles.py as the database owner (DATABASE_URL).\n")
 
 
 def test_main_unreachable_database(monkeypatch, capsys):
-    monkeypatch.setenv("DB_HOST", "127.0.0.1")
-    monkeypatch.setenv("DB_PORT", "1")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody@127.0.0.1:1/unreachable_test")
 
     with pytest.raises(SystemExit) as excinfo:
         setup_roles.main()

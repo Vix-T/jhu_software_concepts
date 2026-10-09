@@ -1,8 +1,7 @@
-"""load_data.py: parsing helpers, load_rows, and the CLI (JSON file -> test database).
+"""load_data.py: parsing helpers, load_rows, connect(), and the CLI (JSON file -> test database).
 
-Uses the test database only: conftest points the DB_* settings at
-TEST_DATABASE_URL for the whole run, which is what load_data.main()
-connects to.
+Uses the test database only: conftest sets DATABASE_URL to TEST_DATABASE_URL
+for the whole run, which is what load_data.main() connects to.
 """
 
 import gzip
@@ -14,7 +13,7 @@ import sys
 from datetime import date
 
 import pytest
-from conftest import make_record
+from conftest import database_name, make_record
 
 import load_data
 
@@ -137,9 +136,7 @@ def test_main_exits_when_database_unreachable(tmp_path, monkeypatch, capsys, row
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
         closed_port = probe.getsockname()[1]
-    monkeypatch.setenv("DB_HOST", "127.0.0.1")
-    monkeypatch.setenv("DB_PORT", str(closed_port))
-    monkeypatch.setenv("DB_NAME", "unreachable_test")
+    monkeypatch.setenv("DATABASE_URL", f"postgresql://nobody@127.0.0.1:{closed_port}/unreachable_test")
     path = _write(tmp_path, [make_record(0)])
 
     with pytest.raises(SystemExit) as excinfo:
@@ -148,7 +145,7 @@ def test_main_exits_when_database_unreachable(tmp_path, monkeypatch, capsys, row
     assert excinfo.value.code == 1
     out = capsys.readouterr().out
     assert out.startswith(load_data.DB_FAILURE_MESSAGE)
-    assert "DB_HOST" in out
+    assert "DATABASE_URL" in out
     assert "Underlying error: " in out
     assert str(closed_port) in out
     monkeypatch.undo()
@@ -166,3 +163,44 @@ def test_main_exits_when_data_file_missing(tmp_path, capsys):
         f"LOAD FAILED: data file not found: {missing}\n"
         "Pass the path to a JSON (or .json.gz) data file as the first argument.\n"
     )
+
+
+def test_connect_uses_database_url_from_environment(monkeypatch, test_database_url):
+    monkeypatch.setenv("DATABASE_URL", test_database_url)
+    conn = load_data.connect()
+    try:
+        assert conn.info.dbname == database_name(test_database_url)
+    finally:
+        conn.close()
+
+
+def test_connect_prefers_an_explicit_url(monkeypatch, test_database_url):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody@127.0.0.1:1/never_used")
+    conn = load_data.connect(test_database_url)
+    try:
+        assert conn.info.dbname == database_name(test_database_url)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_connect_without_any_url_is_config_error(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("DATABASE_URL")
+    else:
+        monkeypatch.setenv("DATABASE_URL", value)
+
+    with pytest.raises(load_data.ConfigError, match=r"^DATABASE_URL is not set \(see \.env\.example\)\.$"):
+        load_data.connect()
+
+
+def test_ensure_table_creates_a_missing_applicants_table(db_conn, test_database_url):
+    with db_conn, db_conn.cursor() as cur:
+        cur.execute("DROP TABLE applicants")
+
+    load_data.ensure_table(test_database_url)
+    load_data.ensure_table(test_database_url)  # already there: no error
+
+    with db_conn, db_conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('applicants')")
+        assert cur.fetchone()[0] == "applicants"

@@ -17,6 +17,7 @@ from datetime import datetime
 
 import psycopg2
 from psycopg2 import sql
+from psycopg2.extras import Json
 
 from sql_utils import (
     APPLICANT_COLUMNS,
@@ -27,10 +28,12 @@ from sql_utils import (
     SINGLE_ROW,
     clamp_limit,
 )
-# Transitional: config.py still lives in src/ until the web slice replaces it.
-from config import ConfigError, psycopg2_dsn
 
 logger = logging.getLogger(__name__)
+
+# The connection URL every database client in the project reads, e.g.
+# postgresql://USER[:PASSWORD]@HOST:PORT/DBNAME.
+DATABASE_URL_ENV = "DATABASE_URL"
 
 # The cleaned Module 2 dataset, bundled with the repo as src/data/applicant_data.json.
 DATA_FILE = os.path.join(
@@ -43,8 +46,8 @@ SEED_ENV = "SEED_JSON"
 
 DB_FAILURE_MESSAGE = (
     "LOAD FAILED: could not connect to PostgreSQL or write to the applicants table.\n"
-    "Check that DB_HOST, DB_PORT, DB_NAME, DB_USER and DB_PASSWORD (environment or module_6/.env)\n"
-    "point at a running PostgreSQL server and an existing database you can write to."
+    "Check that DATABASE_URL points at a running PostgreSQL server and an existing\n"
+    "database you can write to."
 )
 
 CREATE_TABLE_SQL = sql.SQL(
@@ -103,6 +106,13 @@ CREATE TABLE IF NOT EXISTS {} (
     computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 """
+).format(SUMMARY)
+
+# Replaces the snapshot; computed_at is the database's clock at commit time.
+STORE_SUMMARY_SQL = sql.SQL(
+    "INSERT INTO {} (id, results, row_count) VALUES (1, %s, %s) "
+    "ON CONFLICT (id) DO UPDATE SET results = EXCLUDED.results, "
+    "row_count = EXCLUDED.row_count, computed_at = now()"
 ).format(SUMMARY)
 
 # pg_advisory_xact_lock key serialising initialize_database() across workers.
@@ -217,9 +227,20 @@ def load_records(path):
         return json.load(f)
 
 
+class ConfigError(RuntimeError):
+    """DATABASE_URL is not set, and no database URL was passed in."""
+
+
 def connect(database_url=None):
-    """Open a psycopg2 connection to database_url (default: the DB_* settings)."""
-    return psycopg2.connect(psycopg2_dsn(database_url))
+    """Open a psycopg2 connection to database_url (default: $DATABASE_URL).
+
+    libpq parses the URL itself, including percent-escaped characters in the
+    user name or password. Raises ConfigError if there is no URL at all.
+    """
+    url = database_url or os.environ.get(DATABASE_URL_ENV)
+    if not url:
+        raise ConfigError(f"{DATABASE_URL_ENV} is not set (see .env.example).")
+    return psycopg2.connect(url)
 
 
 TABLE_MISSING_MESSAGE = "applicants table missing; run load_data.py as the database owner"
@@ -257,7 +278,7 @@ def create_table(conn):
 
 
 def ensure_table(database_url=None):
-    """Create the applicants table in database_url (default: the DB_* settings) if needed."""
+    """Create the applicants table in database_url (default: $DATABASE_URL) if needed."""
     conn = connect(database_url)
     try:
         create_table(conn)
@@ -392,6 +413,11 @@ def advance_watermark(cur, last_seen, source=WATERMARK_SOURCE):
     cur.execute(ADVANCE_WATERMARK_SQL, [source, last_seen])
 
 
+def store_summary(cur, results, row_count):
+    """Replace the analysis_summary row with `results` (a JSON-able dict); no commit."""
+    cur.execute(STORE_SUMMARY_SQL, [Json(results), row_count])
+
+
 def init_lock_query():
     """SELECT pg_advisory_xact_lock(INIT_LOCK_KEY): held until the transaction ends."""
     stmt = sql.SQL("SELECT pg_advisory_xact_lock(%s) LIMIT %s")
@@ -476,11 +502,10 @@ def initialize_database(conn, seed_path=None):
 
 
 def main(data_file=DATA_FILE):
-    """Load `data_file` into the DB_* database and print a summary.
+    """Load `data_file` into the $DATABASE_URL database and print a summary.
 
     Exits with status 1 and an actionable message if the data file is missing,
-    the DB_* settings are incomplete, or the database can't be reached or
-    written to.
+    DATABASE_URL is not set, or the database can't be reached or written to.
     """
     try:
         records = load_records(data_file)

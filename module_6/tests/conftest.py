@@ -6,54 +6,52 @@ guards enforce that:
 
 - pytest refuses to start (pytest.UsageError) unless TEST_DATABASE_URL is
   set and its database name ends in "_test".
-- For the whole run, DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD are
-  overridden with the parts of the test URL, so any code path that falls
-  back to config.get_db_url() also lands on the test database (python-dotenv
-  never overrides a variable already set in the environment). The original
-  values are restored when the run ends.
+- For the whole run, DATABASE_URL (what every database client reads) is
+  overridden with the test URL, and RABBITMQ_URL with an address that can't
+  resolve, so nothing can reach a real broker unless a test fakes
+  pika.BlockingConnection (the `broker` fixture). The original values are
+  restored when the run ends.
 
-The developer's own module_6/.env never reaches the code under test:
-config.load_dotenv skips that one file for the whole run (any other path,
-such as a test's temporary .env, loads normally). Otherwise any keys in it
-beyond the pinned ones would leak into os.environ and could change a
-test's outcome. TEST_DATABASE_URL is the only value the suite takes from it,
-read above with dotenv_values().
+No code under test reads a .env file; TEST_DATABASE_URL is the only value
+the suite takes from module_6/.env, read below with dotenv_values().
 
 The applicants table is created once per session with the application's
 own CREATE_TABLE_SQL and truncated before every test, so each test starts
 from an empty table; ingestion_watermarks and analysis_summary are dropped
-before every test.
+before every test (the `tables` fixture recreates them).
 """
 
+import json
 import os
 import secrets
+from urllib.parse import quote, urlsplit, urlunsplit
 
+import pika
 import psycopg2
 import pytest
 from bs4 import BeautifulSoup
 from dotenv import dotenv_values
+from pika.exceptions import ConnectionWrongStateError
 from psycopg2 import sql
 from selenium.common.exceptions import NoSuchElementException
-from sqlalchemy.engine import make_url
 
-import config as app_config
 import load_data
-from config import db_env
-from flask_app import AppDependencies, create_app
-from busy_state import InMemoryBusyState
+import query_data
+from app import create_app
 
 ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 
+# A broker address that never resolves (.invalid is reserved, RFC 2606).
+TEST_RABBITMQ_URL = "amqp://guest:guest@rabbitmq.invalid:5672/%2F"
+
 _UNSET = object()
-_saved_db_env = {}
-_real_load_dotenv = app_config.load_dotenv
+_saved_env = {}
 
 
-def _load_dotenv_except_developer_env(dotenv_path=None, **kwargs):
-    if dotenv_path is not None and os.path.abspath(dotenv_path) == app_config.ENV_FILE:
-        return False
-    return _real_load_dotenv(dotenv_path, **kwargs)
+def database_name(url):
+    """The database name in a postgresql:// URL."""
+    return urlsplit(url).path.lstrip("/")
 
 
 def _read_test_database_url():
@@ -63,7 +61,7 @@ def _read_test_database_url():
             "TEST_DATABASE_URL is not set. Define it in the environment or in module_6/.env as "
             "postgresql://USER[:PASSWORD]@HOST:PORT/<name>_test"
         )
-    database = make_url(url).database or ""
+    database = database_name(url)
     if not database.endswith("_test"):
         raise pytest.UsageError(
             f"Refusing to run: TEST_DATABASE_URL points at database {database!r}, "
@@ -81,19 +79,18 @@ def pytest_configure(config):
     test_url = _read_test_database_url()
     config.test_database_url = test_url
     test_env = {
-        **db_env(test_url),
+        "DATABASE_URL": test_url,
+        "RABBITMQ_URL": TEST_RABBITMQ_URL,
         "APP_DB_USER": TEST_APP_ROLE,
         "APP_DB_PASSWORD": secrets.token_urlsafe(16),
     }
     for name in test_env:
-        _saved_db_env[name] = os.environ.get(name, _UNSET)
+        _saved_env[name] = os.environ.get(name, _UNSET)
     os.environ.update(test_env)
-    app_config.load_dotenv = _load_dotenv_except_developer_env
 
 
 def pytest_unconfigure(config):
-    app_config.load_dotenv = _real_load_dotenv
-    for name, value in _saved_db_env.items():
+    for name, value in _saved_env.items():
         if value is _UNSET:
             os.environ.pop(name, None)
         else:
@@ -330,13 +327,21 @@ def real_loader(test_database_url):
 
 
 @pytest.fixture
-def loader_spy(real_loader):
-    return Spy(real_loader)
+def tables(db_conn):
+    """All three tables, as the worker's initialize_database() leaves them (applicants empty)."""
+    with db_conn, db_conn.cursor() as cur:
+        load_data.create_tables(cur)
 
 
 @pytest.fixture
-def refresh_spy():
-    return Spy()
+def refresh_summary(db_conn, tables):
+    """Recompute and store the analysis summary from the current rows, as the worker does."""
+
+    def refresh():
+        with db_conn, db_conn.cursor() as cur:
+            return query_data.refresh_summary(cur)
+
+    return refresh
 
 
 # ---------------------------------------------------------------------------
@@ -345,30 +350,105 @@ def refresh_spy():
 
 
 @pytest.fixture
-def busy_state():
-    return InMemoryBusyState()
+def make_app(test_database_url):
+    """Build a web app on the test database (or on `database_url`)."""
 
-
-@pytest.fixture
-def make_app(test_database_url, busy_state, _applicants_table):
-    """Build an app on the test database. analysis_fn is never injected, so pages
-    run the real get_analysis(); refresh_fn is real unless a test passes one."""
-
-    def build(**overrides):
-        overrides.setdefault("busy_state", busy_state)
-        return create_app({"DB_URL": test_database_url, "TESTING": True}, AppDependencies(**overrides))
+    def build(database_url=test_database_url):
+        return create_app({"DATABASE_URL": database_url, "TESTING": True})
 
     return build
 
 
 @pytest.fixture
-def app(make_app, scraper, loader_spy, refresh_spy):
-    return make_app(scraper=scraper, loader=loader_spy, refresh_fn=refresh_spy)
+def app(make_app, tables):
+    return make_app()
 
 
 @pytest.fixture
 def client(app):
     return app.test_client()
+
+
+# ---------------------------------------------------------------------------
+# RabbitMQ: a fake pika.BlockingConnection (the only part of pika replaced)
+# ---------------------------------------------------------------------------
+
+
+class FakeBroker:
+    """Records what publisher.py does through pika, and can be told to fail.
+
+    connect_error / channel_error / publish_error: an exception to raise from
+    pika.BlockingConnection(), connection.channel() or channel.basic_publish().
+    publish_drops_connection: the broker also closes the connection when the
+    publish fails (so the publisher must not close it a second time).
+    """
+
+    def __init__(self):
+        self.connections = []
+        self.declarations = []
+        self.confirm_calls = 0
+        self.published = []
+        self.connect_error = None
+        self.channel_error = None
+        self.publish_error = None
+        self.publish_drops_connection = False
+
+    def bodies(self):
+        return [json.loads(message["body"]) for message in self.published]
+
+
+class FakeChannel:
+    def __init__(self, broker, connection):
+        self.broker = broker
+        self.connection = connection
+
+    def exchange_declare(self, **kwargs):
+        self.broker.declarations.append(("exchange", kwargs))
+
+    def queue_declare(self, **kwargs):
+        self.broker.declarations.append(("queue", kwargs))
+
+    def queue_bind(self, **kwargs):
+        self.broker.declarations.append(("bind", kwargs))
+
+    def confirm_delivery(self):
+        self.broker.confirm_calls += 1
+
+    def basic_publish(self, **kwargs):
+        if self.broker.publish_error is not None:
+            if self.broker.publish_drops_connection:
+                self.connection.is_open = False
+            raise self.broker.publish_error
+        self.broker.published.append(kwargs)
+
+
+class FakeConnection:
+    def __init__(self, broker, parameters):
+        if broker.connect_error is not None:
+            raise broker.connect_error
+        self.broker = broker
+        self.parameters = parameters
+        self.is_open = True
+        self.close_calls = 0
+        broker.connections.append(self)
+
+    def channel(self):
+        if self.broker.channel_error is not None:
+            raise self.broker.channel_error
+        return FakeChannel(self.broker, self)
+
+    def close(self):
+        if not self.is_open:
+            raise ConnectionWrongStateError("connection already closed")
+        self.close_calls += 1
+        self.is_open = False
+
+
+@pytest.fixture
+def broker(monkeypatch):
+    fake = FakeBroker()
+    monkeypatch.setattr(pika, "BlockingConnection", lambda parameters: FakeConnection(fake, parameters))
+    return fake
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +466,8 @@ def drop_role(conn, role):
 
 
 def role_url(test_database_url, role, password):
-    """TEST_DATABASE_URL, logging in as `role` instead."""
-    url = make_url(test_database_url).set(username=role, password=password)
-    return url.render_as_string(hide_password=False)
+    """TEST_DATABASE_URL, logging in as `role` (with `password`) instead."""
+    parts = urlsplit(test_database_url)
+    host = parts.netloc.rpartition("@")[2]
+    netloc = f"{quote(role, safe='')}:{quote(password, safe='')}@{host}"
+    return urlunsplit(parts._replace(netloc=netloc))

@@ -1,10 +1,8 @@
-"""Rows written by Pull Data, dedup on URL, and the row/analysis query functions."""
+"""Rows written by a pull, dedup on URL, and the stored analysis summary."""
 
 import pytest
 
-import load_data
-from models import make_session_factory
-from orm_queries import get_analysis, get_applicants
+import pull_data
 
 pytestmark = pytest.mark.db
 
@@ -15,6 +13,7 @@ MODULE3_FIELDS = {
 }
 LLM_FIELDS = {"llm_generated_program", "llm_generated_university"}
 
+# Every value the analysis page renders (the keys of query_data.summary_from_answers()).
 ANALYSIS_KEYS = {
     "q1_count", "q2_num", "q2_denom", "q2_pct", "q3", "q4_avg", "q4_n",
     "q5_num", "q5_denom", "q5_pct", "q6_avg", "q6_n", "q7_count", "q8_count",
@@ -23,37 +22,31 @@ ANALYSIS_KEYS = {
 }
 
 
-@pytest.fixture
-def session(test_database_url):
-    with make_session_factory(test_database_url)() as session:
-        yield session
-
-
-def test_pull_inserts_rows_with_required_fields(client, row_count, fetch_rows, fake_records):
+def test_pull_inserts_rows_with_required_fields(scraper, real_loader, row_count, fetch_rows, fake_records):
     assert row_count() == 0
 
-    response = client.post("/pull-data")
-    assert response.status_code == 200
+    result = pull_data.run_pull(scraper, real_loader)
+    assert result["inserted"] == len(fake_records)
 
     rows = fetch_rows()
     assert len(rows) == len(fake_records)
     assert {row["url"] for row in rows} == {r["URL"] for r in fake_records}
     for row in rows:
+        assert set(row) == MODULE3_FIELDS
         for field in MODULE3_FIELDS - LLM_FIELDS:
             assert row[field] is not None, field
-        # Pull Data never runs the LLM-cleaning step (Module 3 design).
+        # A pull never runs the LLM-cleaning step (Module 3 design).
         for field in LLM_FIELDS:
             assert row[field] is None, field
 
 
-def test_pull_twice_idempotent(client, row_count, fake_records):
-    first = client.post("/pull-data")
-    assert first.get_json()["inserted"] == len(fake_records)
+def test_pull_twice_idempotent(scraper, real_loader, row_count, fake_records):
+    first = pull_data.run_pull(scraper, real_loader)
+    assert first["inserted"] == len(fake_records)
     count_after_first = row_count()
 
-    second = client.post("/pull-data")
-    assert second.status_code == 200
-    assert second.get_json()["inserted"] == 0
+    second = pull_data.run_pull(scraper, real_loader)
+    assert (second["inserted"], second["skipped"]) == (0, len(fake_records))
     assert row_count() == count_after_first
 
 
@@ -62,20 +55,27 @@ def test_load_rows_duplicates_skipped_not_failed(seed, fake_records):
     assert seed(fake_records) == (0, 3, [])
 
 
-def test_get_applicants_keys(seed, session, fake_records):
+def test_stored_summary_has_every_page_key(seed, refresh_summary, db_conn, fake_records):
     seed(fake_records)
 
-    rows = get_applicants(session)
-    assert len(rows) == 3
-    for row in rows:
-        assert set(row.keys()) == MODULE3_FIELDS
-    assert [row["url"] for row in rows] == [r["URL"] for r in fake_records]
-    assert len(get_applicants(session, limit=2)) == 2
+    summary = refresh_summary()
+
+    assert set(summary) == ANALYSIS_KEYS
+    assert summary["q1_count"] == 3
+    with db_conn, db_conn.cursor() as cur:
+        cur.execute("SELECT id, results, row_count FROM analysis_summary")
+        [(row_id, stored, row_count)] = cur.fetchall()
+    assert (row_id, row_count) == (1, 3)
+    assert list(stored) == list(summary)  # stored as JSON, in the same key order
+    assert list(stored["q3"]) == ["GPA", "GRE", "GRE V", "GRE AW"]
+    assert stored["q1_count"] == 3
 
 
-def test_get_analysis_keys(seed, session, fake_records):
+def test_refresh_replaces_the_single_summary_row(seed, refresh_summary, db_conn, fake_records):
+    refresh_summary()
     seed(fake_records)
+    refresh_summary()
 
-    analysis = get_analysis(session)
-    assert set(analysis.keys()) == ANALYSIS_KEYS
-    assert analysis["q1_count"] == 3
+    with db_conn, db_conn.cursor() as cur:
+        cur.execute("SELECT row_count, results->>'q1_count' FROM analysis_summary")
+        assert cur.fetchall() == [(3, "3")]

@@ -14,7 +14,6 @@ from selenium.common.exceptions import WebDriverException
 import load_data
 import pull_data
 import scrape
-from busy_state import FileLockBusyState
 
 pytestmark = pytest.mark.integration
 
@@ -42,41 +41,37 @@ class AlwaysCrashes:
         raise WebDriverException(f"session not created (attempt {self.attempts})")
 
 
-def test_pull_inserts_only_new_entries_and_stops_at_known_page(seed, make_app, fetch_rows):
+def test_pull_inserts_only_new_entries_and_stops_at_known_page(seed, real_loader, fetch_rows):
     _seed_known(seed)
     factory = DriverFactory(pull_pages())
-    client = make_app(scraper=_scraper(factory)).test_client()
 
-    response = client.post("/pull-data")
+    result = pull_data.run_pull(_scraper(factory), real_loader)
 
-    assert response.status_code == 200
-    assert response.get_json() == {"ok": True, "inserted": 2}
+    assert (result["scraped"], result["inserted"]) == (2, 2)
     assert factory.visited == PULL_PAGE_URLS[:2]  # page 3 never fetched
     urls = {row["url"] for row in fetch_rows()}
     assert urls == {result_url(rid) for rid in KNOWN_IDS + [5001, 5002]}
 
 
-def test_repeat_pull_finds_nothing_new(seed, make_app, row_count):
+def test_repeat_pull_finds_nothing_new(seed, real_loader, row_count):
     _seed_known(seed)
     factory = DriverFactory(pull_pages())
-    client = make_app(scraper=_scraper(factory)).test_client()
 
-    assert client.post("/pull-data").get_json() == {"ok": True, "inserted": 2}
-    second = client.post("/pull-data")
+    assert pull_data.run_pull(_scraper(factory), real_loader)["inserted"] == 2
+    second = pull_data.run_pull(_scraper(factory), real_loader)
 
-    assert second.get_json() == {"ok": True, "inserted": 0}
+    assert (second["scraped"], second["inserted"]) == (0, 0)
     # The second pull starts again at page 1 (newest), finds nothing new there, and stops.
     assert factory.visited == PULL_PAGE_URLS[:2] + PULL_PAGE_URLS[:1]
     assert row_count() == 7
 
 
-def test_pull_stops_at_target_count(make_app, row_count, capsys):
+def test_pull_stops_at_target_count(real_loader, row_count, capsys):
     factory = DriverFactory(pull_pages())
-    client = make_app(scraper=_scraper(factory, target_count=3)).test_client()
 
-    response = client.post("/pull-data")
+    result = pull_data.run_pull(_scraper(factory, target_count=3), real_loader)
 
-    assert response.get_json() == {"ok": True, "inserted": 5}
+    assert result["inserted"] == 5
     assert factory.visited == PULL_PAGE_URLS[:1]
     assert row_count() == 5
     assert "stopped because collected at least 3 new entries" in capsys.readouterr().out
@@ -183,23 +178,6 @@ def test_pull_cli_records_retries_exhausted(pull_result_path, capsys):
     assert result["ok"] is False
     assert result["error"].startswith("ScrapeRetriesExhausted: browser session crashed 4 times in a row")
     assert "PULL FAILED: ScrapeRetriesExhausted" in capsys.readouterr().out
-
-
-def test_in_process_pull_retries_exhausted_releases_lock(make_app, tmp_path, pull_result_path, row_count):
-    lock = FileLockBusyState(str(tmp_path / "pull.lock"))
-    factory = AlwaysCrashes()
-    client = make_app(scraper=_scraper(factory, max_retries=1, crash_retry_wait=0), busy_state=lock).test_client()
-
-    response = client.post("/pull-data")
-
-    assert response.status_code == 500
-    body = response.get_json()
-    assert body["ok"] is False
-    assert body["error"].startswith("browser session crashed 2 times in a row")
-    assert factory.attempts == 2
-    assert lock.is_busy() is False
-    assert pull_data.read_pull_result(str(pull_result_path))["ok"] is False
-    assert row_count() == 0
 
 
 def test_existing_urls_lookup(seed, test_database_url):

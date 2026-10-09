@@ -1,4 +1,8 @@
-"""Rendered analysis output: "Answer:" labels and two-decimal percentages."""
+"""Rendered analysis output: "Answer:" labels and two-decimal percentages.
+
+Rows are seeded, the summary is computed the way the worker does it
+(conftest refresh_summary), and the page renders that stored summary.
+"""
 
 import re
 
@@ -6,9 +10,7 @@ import pytest
 from bs4 import BeautifulSoup
 from conftest import make_record
 
-import orm_queries
 import query_data
-from models import make_session_factory
 
 pytestmark = pytest.mark.analysis
 
@@ -36,8 +38,9 @@ def _page(client):
     return response.get_data(as_text=True)
 
 
-def test_every_result_has_answer_label(client, seed):
+def test_every_result_has_answer_label(client, seed, refresh_summary):
     seed(_seed_rows())
+    refresh_summary()
     soup = BeautifulSoup(_page(client), "html.parser")
 
     sections = soup.select("section.question")
@@ -47,8 +50,9 @@ def test_every_result_has_answer_label(client, seed):
     assert soup.get_text().count("Answer:") == len(sections)
 
 
-def test_percentages_two_decimals(client, seed):
+def test_percentages_two_decimals(client, seed, refresh_summary):
     seed(_seed_rows())
+    refresh_summary()
     text = BeautifulSoup(_page(client), "html.parser").get_text()
 
     percentages = LOOSE_PERCENT.findall(text)
@@ -60,7 +64,8 @@ def test_percentages_two_decimals(client, seed):
     assert "0.00%" in percentages
 
 
-def test_empty_database_shows_na(client):
+def test_empty_database_shows_na(client, refresh_summary):
+    refresh_summary()
     text = BeautifulSoup(_page(client), "html.parser").get_text()
 
     assert "N/A" in text
@@ -68,7 +73,7 @@ def test_empty_database_shows_na(client):
         assert STRICT_PERCENT.fullmatch(value), value
 
 
-def test_custom2_ties_ordered_by_degree(client, seed, db_conn, test_database_url):
+def test_custom2_ties_ordered_by_degree(client, seed, db_conn, refresh_summary):
     # Three degree types tied at 2 entries each, inserted in reverse alphabetical
     # order; ties must come back alphabetically by degree, everywhere.
     rows = []
@@ -81,8 +86,7 @@ def test_custom2_ties_ordered_by_degree(client, seed, db_conn, test_database_url
 
     with db_conn, db_conn.cursor() as cur:
         assert [(d, a, t) for d, a, t, _ in query_data.custom2(cur)] == expected
-    with make_session_factory(test_database_url)() as session:
-        assert [(d, a, t) for d, a, t, _ in orm_queries.custom2_acceptance_by_degree(session)] == expected
+    refresh_summary()
 
     table = BeautifulSoup(_page(client), "html.parser").select("section.question table tbody tr")
     assert [tr.find("td").get_text() for tr in table] == ["EdD", "Masters", "PhD", "MFA"]

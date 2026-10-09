@@ -1,4 +1,4 @@
-"""CLI entry points of query_data.py and orm_queries.py, run against seeded test-DB rows."""
+"""CLI entry point of query_data.py, run against seeded test-DB rows."""
 
 import os
 import runpy
@@ -7,9 +7,6 @@ import sys
 
 import pytest
 from conftest import make_record
-
-import orm_queries
-from config import db_env
 
 pytestmark = pytest.mark.analysis
 
@@ -56,23 +53,6 @@ QUERY_SEED = [
     _row(6, "Fall 2026", "American", "Accepted", "PhD", "Carnegie Mellon University", "3.80",
          llm_university="Carnegie Melon University"),
 ]
-
-ORM_MAIN_OUTPUT = """\
-ORM vs. raw-SQL (query_data.py) comparison, both computed live in this run:
-
-Q1         Fall 2026 applicant count                     ORM=4          raw-SQL=4          [MATCH]
-Q4         Avg GPA, American, Fall 2026                  ORM=3.67       raw-SQL=3.67       [MATCH]
-Q5         Fall 2025 acceptance %                        ORM=33.33      raw-SQL=33.33      [MATCH]
-Q8         Fall 2026/Accepted/PhD/CS, original fields    ORM=3          raw-SQL=3          [MATCH]
-Q9         Same as Q8, llm-generated fields              ORM=2          raw-SQL=2          [MATCH]
-Custom Q1  GRE Quant contamination %                     ORM=14.29      raw-SQL=14.29      [MATCH]
-
-Q4 n=3 (raw-SQL n=3)
-Q5 1/3 (raw-SQL 1/3)
-Custom Q1 1/7 (raw-SQL 1/7)
-
-All ORM results match the raw-SQL results from query_data.py.
-"""
 
 QUERY_DATA_MAIN_OUTPUT = """\
 Fall 2026 applicant count: 4
@@ -121,32 +101,6 @@ def test_query_data_main_output(seeded, capsys):
     assert capsys.readouterr().out == QUERY_DATA_MAIN_OUTPUT
 
 
-def test_orm_queries_main_output(seeded, capsys):
-    runpy.run_path(os.path.join(SRC_DIR, "orm_queries.py"), run_name="__main__")
-    assert capsys.readouterr().out == ORM_MAIN_OUTPUT
-
-
-def test_format_comparison_all_match():
-    table, verdict = orm_queries.format_comparison([
-        ("Q1", "Fall 2026 applicant count", 4, 4, "{}"),
-        ("Q4", "Avg GPA, American, Fall 2026", 3.67, 3.67, "{:.2f}"),
-    ])
-    assert [line.endswith("[MATCH]") for line in table] == [True, True]
-    assert "ORM=3.67" in table[1] and "raw-SQL=3.67" in table[1]
-    assert verdict == "All ORM results match the raw-SQL results from query_data.py."
-
-
-def test_format_comparison_reports_mismatch():
-    table, verdict = orm_queries.format_comparison([
-        ("Q1", "Fall 2026 applicant count", 4, 4, "{}"),
-        ("Q8", "Fall 2026/Accepted/PhD/CS, original fields", 3, 2, "{}"),
-    ])
-    assert table[0].endswith("[MATCH]")
-    assert table[1].endswith("[MISMATCH]")
-    assert "ORM=3" in table[1] and "raw-SQL=2" in table[1]
-    assert verdict.startswith("MISMATCH DETECTED")
-
-
 def test_query_data_main_on_empty_table(capsys):
     runpy.run_path(os.path.join(SRC_DIR, "query_data.py"), run_name="__main__")
 
@@ -160,21 +114,10 @@ def test_query_data_main_on_empty_table(capsys):
     assert out.endswith("Custom Q2 (acceptance rate by degree type):\n  N/A (no data)\n")
 
 
-def test_orm_queries_main_on_empty_table(capsys):
-    runpy.run_path(os.path.join(SRC_DIR, "orm_queries.py"), run_name="__main__")
-
-    out = capsys.readouterr().out
-    assert "ORM=0          raw-SQL=0          [MATCH]" in out
-    assert "Avg GPA, American, Fall 2026                  ORM=N/A (no data) raw-SQL=N/A (no data) [MATCH]" in out
-    assert "Q5 0/0 (raw-SQL 0/0)\n" in out
-    assert out.endswith("All ORM results match the raw-SQL results from query_data.py.\n")
-
-
-@pytest.mark.parametrize("script", ["query_data.py", "orm_queries.py"])
-def test_cli_exits_cleanly_on_empty_table(script, test_database_url):
+def test_cli_exits_cleanly_on_empty_table(test_database_url):
     result = subprocess.run(
-        [sys.executable, os.path.join(SRC_DIR, script)],
-        env={**os.environ, **db_env(test_database_url), "PYTHONPATH": SCRIPT_PYTHONPATH},
+        [sys.executable, os.path.join(SRC_DIR, "query_data.py")],
+        env={**os.environ, "DATABASE_URL": test_database_url, "PYTHONPATH": SCRIPT_PYTHONPATH},
         capture_output=True,
         text=True,
         timeout=60,

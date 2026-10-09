@@ -11,9 +11,7 @@ from psycopg2 import sql
 
 import load_data
 import query_data
-from applicant_search import build_applicants_query, escape_like
-from models import make_session_factory
-from orm_queries import get_applicants
+from app.applicant_search import build_applicants_query, escape_like
 from sql_utils import MAX_LIMIT
 
 pytestmark = pytest.mark.db
@@ -101,7 +99,7 @@ def test_existing_urls_checks_candidates_in_batches(seed, test_database_url):
     ["' OR '1'='1", "x'; DROP TABLE applicants; --", "Robert'); DELETE FROM applicants;--"],
 )
 def test_search_builder_never_puts_user_text_in_sql(university, db_conn):
-    stmt, params = build_applicants_query(limit="5", sort="date_added", order="desc", university=university)
+    stmt, params = build_applicants_query(limit=5, sort="date_added", order="desc", university=university)
     text = stmt.as_string(db_conn)
 
     assert university not in text
@@ -128,12 +126,3 @@ def test_search_builder_without_filter(db_conn):
 )
 def test_escape_like(raw, escaped):
     assert escape_like(raw) == escaped
-
-
-def test_orm_get_applicants_limit_is_clamped(seed, test_database_url):
-    seed(make_records(105))
-    with make_session_factory(test_database_url)() as session:
-        assert len(get_applicants(session)) == 10
-        assert len(get_applicants(session, limit=500)) == MAX_LIMIT
-        assert len(get_applicants(session, limit=0)) == 1
-        assert len(get_applicants(session, limit="7")) == 7
