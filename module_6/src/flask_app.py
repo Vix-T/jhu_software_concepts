@@ -47,6 +47,7 @@ from flask import Flask, jsonify, render_template, request
 from selenium.common.exceptions import WebDriverException
 
 import load_data
+from sql_utils import INSUFFICIENT_PRIVILEGE, ValidationError, clamp_limit
 from applicant_search import (
     DEFAULT_ORDER,
     DEFAULT_SORT,
@@ -67,7 +68,6 @@ from pull_data import (
     write_pull_result,
 )
 from scrape import ScrapeRetriesExhausted
-from sql_utils import INSUFFICIENT_PRIVILEGE, ValidationError, clamp_limit
 
 logger = logging.getLogger(__name__)
 

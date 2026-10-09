@@ -11,8 +11,8 @@ SELECT ends in LIMIT %s with a clamp_limit()-ed value.
 import psycopg2
 from psycopg2 import sql
 
-from config import psycopg2_dsn
 from sql_utils import APPLICANTS, MAX_LIMIT, SINGLE_ROW, clamp_limit
+from config import psycopg2_dsn
 
 # Word-boundary (\y) regex patterns, matched case-insensitively (~*).
 # See conversation history / query_results write-up for the false-positive

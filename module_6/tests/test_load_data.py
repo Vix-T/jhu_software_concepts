@@ -21,6 +21,7 @@ import load_data
 pytestmark = pytest.mark.db
 
 SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+DB_DIR = os.path.join(SRC_DIR, "db")
 
 
 def _write(tmp_path, records):
@@ -99,7 +100,7 @@ def test_cli_loads_file_named_on_command_line(tmp_path, monkeypatch, capsys, fet
     path = _write(tmp_path, [good, no_url])
     monkeypatch.setattr(sys, "argv", ["load_data.py", path])
 
-    runpy.run_path(os.path.join(SRC_DIR, "load_data.py"), run_name="__main__")
+    runpy.run_path(os.path.join(DB_DIR, "load_data.py"), run_name="__main__")
 
     assert [row["url"] for row in fetch_rows()] == [good["URL"]]
     assert capsys.readouterr().out == (
@@ -122,8 +123,7 @@ def test_load_records_reads_gzip(tmp_path):
 
 
 def test_bundled_dataset_is_the_default():
-    module_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    assert load_data.DATA_FILE == os.path.join(module_dir, "data", "llm_extend_applicant_data_full.json.gz")
+    assert load_data.DATA_FILE == os.path.join(SRC_DIR, "data", "applicant_data.json")
 
     records = load_data.load_records(load_data.DATA_FILE)
     assert len(records) == 60025

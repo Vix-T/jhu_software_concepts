@@ -22,12 +22,12 @@ import psycopg2
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.sql import functions as sql_functions
 
+from sql_utils import MAX_LIMIT, SINGLE_ROW, clamp_limit
 import query_data
 from config import psycopg2_dsn
 from models import Applicant, make_session_factory
 from query_data import CS_PATTERN, JHU_PATTERN, NO_DATA, Q8_Q9_UNIVERSITIES
 from query_data import percent_or_none as _percent
-from sql_utils import MAX_LIMIT, SINGLE_ROW, clamp_limit
 
 
 def _round2(value):

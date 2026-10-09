@@ -14,6 +14,9 @@ from config import db_env
 pytestmark = pytest.mark.analysis
 
 SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+# The scripts import load_data / sql_utils from src/db, which is found on the path, not
+# next to the script: the subprocess gets both import roots, as a deployment would.
+SCRIPT_PYTHONPATH = os.pathsep.join([SRC_DIR, os.path.join(SRC_DIR, "db")])
 
 
 def _row(i, term, nationality, status, degree, university, gpa, gre="165", llm_university=None):
@@ -171,7 +174,7 @@ def test_orm_queries_main_on_empty_table(capsys):
 def test_cli_exits_cleanly_on_empty_table(script, test_database_url):
     result = subprocess.run(
         [sys.executable, os.path.join(SRC_DIR, script)],
-        env={**os.environ, **db_env(test_database_url)},
+        env={**os.environ, **db_env(test_database_url), "PYTHONPATH": SCRIPT_PYTHONPATH},
         capture_output=True,
         text=True,
         timeout=60,

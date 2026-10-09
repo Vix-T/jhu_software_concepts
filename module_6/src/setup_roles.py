@@ -31,9 +31,9 @@ from dataclasses import dataclass
 import psycopg2
 from psycopg2 import sql
 
-from config import ConfigError, get_app_role, psycopg2_dsn
 from load_data import TABLE_MISSING_MESSAGE, TableMissingError, table_exists_query
 from sql_utils import APPLICANTS_TABLE, SINGLE_ROW, clamp_limit
+from config import ConfigError, get_app_role, psycopg2_dsn
 
 ROLE_ATTRIBUTES = sql.SQL(
     "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT"

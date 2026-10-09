@@ -21,7 +21,8 @@ read above with dotenv_values().
 
 The applicants table is created once per session with the application's
 own CREATE_TABLE_SQL and truncated before every test, so each test starts
-from an empty table.
+from an empty table; ingestion_watermarks and analysis_summary are dropped
+before every test.
 """
 
 import os
@@ -129,7 +130,10 @@ def db_conn(test_database_url, _applicants_table):
 @pytest.fixture(autouse=True)
 def _empty_applicants(db_conn):
     # Recreate first in case an earlier test dropped the table on purpose.
+    # The watermark and summary tables are dropped, so every test starts
+    # without them, as on a database initialize_database() hasn't touched.
     with db_conn, db_conn.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS ingestion_watermarks, analysis_summary")
         cur.execute(load_data.CREATE_TABLE_SQL)
         cur.execute("TRUNCATE applicants RESTART IDENTITY")
 
