@@ -182,8 +182,8 @@ def test_missing_table_is_503_and_web_does_not_create_it(make_app, db_conn, capl
     status, body = _get(make_app().test_client())
 
     assert status == 503
-    assert body == {"error": "database not initialized"}
-    assert "Applicant search: database not initialized" in caplog.text
+    assert body == {"error": "database initializing"}
+    assert "Applicant search: database initializing" in caplog.text
     with db_conn, db_conn.cursor() as cur:  # the web never runs DDL: the worker creates tables
         cur.execute("SELECT to_regclass('applicants')")
         assert cur.fetchone()[0] is None

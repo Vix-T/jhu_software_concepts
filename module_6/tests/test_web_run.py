@@ -13,8 +13,9 @@ pytestmark = pytest.mark.web
 RUN_PY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "web", "run.py")
 
 
-def test_main_binds_all_interfaces_on_8080_with_debug_off(monkeypatch, tables):
+def test_main_binds_all_interfaces_on_8080_with_debug_off(monkeypatch, refresh_summary):
     monkeypatch.delenv("FLASK_DEBUG", raising=False)
+    refresh_summary()
     runs = []
     monkeypatch.setattr(Flask, "run", lambda self, **kwargs: runs.append((self, kwargs)))
 
@@ -25,7 +26,7 @@ def test_main_binds_all_interfaces_on_8080_with_debug_off(monkeypatch, tables):
     # DATABASE_URL points at the test database for the whole run (conftest).
     response = app.test_client().get("/")
     assert response.status_code == 200
-    assert b"Analysis not computed yet" in response.data
+    assert b"Answer:" in response.data
 
 
 def test_flask_debug_env_turns_debugger_on(monkeypatch):

@@ -9,12 +9,14 @@ database.
 import socket
 from datetime import datetime, timezone
 
+import psycopg2
 import pytest
 from bs4 import BeautifulSoup
 from flask import Flask
 
 import load_data
 from app import create_app
+from app import db as app_db
 from app.config import ConfigError
 from conftest import make_record
 
@@ -90,18 +92,36 @@ def test_create_app_without_database_url_is_config_error(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_not_computed_yet(client):
-    response = client.get("/analysis")
+INITIALIZING_MESSAGE = (
+    "The database is being initialised. The first start loads about 60,000 rows "
+    "and takes around a minute. This page refreshes automatically."
+)
 
-    assert response.status_code == 200
+
+def _refresh_seconds(soup):
+    """The <meta http-equiv="refresh"> delay, or None when the page doesn't refresh itself."""
+    meta = soup.find("meta", attrs={"http-equiv": "refresh"})
+    return None if meta is None else meta["content"]
+
+
+def _assert_initializing_page(response):
+    assert response.status_code == 503
     soup = _soup(response)
-    message = soup.select_one('[data-testid="not-computed"]').get_text(" ", strip=True)
-    assert message == "Analysis not computed yet. Click Update Analysis to queue it for the worker."
+    assert soup.select_one('[data-testid="db-initializing"]').get_text(" ", strip=True) == INITIALIZING_MESSAGE
+    assert _refresh_seconds(soup) == "5"
+    assert soup.select('[data-testid="db-unavailable"]') == []
     assert soup.select("section.question") == []
     assert len(soup.select('[data-testid="pull-data-btn"]')) == 1
     assert len(soup.select('[data-testid="update-analysis-btn"]')) == 1
-    assert "Analysis last updated: never" in _text(response)
-    assert "Data last updated: never" in _text(response)
+    assert b"Traceback" not in response.data
+
+
+def test_first_start_without_a_summary_is_the_initializing_page(client, caplog):
+    # Tables exist (the `tables` fixture), but the worker hasn't stored the first summary.
+    response = client.get("/analysis")
+
+    _assert_initializing_page(response)
+    assert "Analysis page: database initializing (no analysis summary yet)" in caplog.text
 
 
 def test_page_renders_stored_summary(client, seed, refresh_summary):
@@ -112,7 +132,8 @@ def test_page_renders_stored_summary(client, seed, refresh_summary):
 
     assert response.status_code == 200
     soup = _soup(response)
-    assert soup.select('[data-testid="not-computed"]') == []
+    assert soup.select('[data-testid="db-initializing"]') == []
+    assert _refresh_seconds(soup) is None  # a normal page never reloads itself
     text = _text(response)
     assert "Fall 2026 applicant count: 1" in text
     assert text.count("Answer:") == len(soup.select("section.question")) == 11
@@ -243,7 +264,10 @@ def test_page_is_503_when_database_down(down_client, caplog, path):
     assert soup.select('[data-testid="timestamps"]') == []
     assert len(soup.select('[data-testid="pull-data-btn"]')) == 1
     assert b"Traceback" not in response.data
+    assert soup.select('[data-testid="db-initializing"]') == []
+    assert _refresh_seconds(soup) is None  # a down database keeps its own message, no auto-refresh
     assert "Analysis page: database unavailable" in caplog.text
+    assert any(record.exc_info for record in caplog.records)  # logged with its traceback
 
 
 def test_status_is_503_when_database_down(down_client, caplog):
@@ -254,18 +278,33 @@ def test_status_is_503_when_database_down(down_client, caplog):
     assert "Status: database unavailable" in caplog.text
 
 
-def test_tables_missing_is_503_not_initialized(make_app, caplog):
+def test_tables_missing_is_the_initializing_page(make_app, caplog):
     # conftest drops analysis_summary and ingestion_watermarks before each test;
     # this app is built without the `tables` fixture, so they don't exist.
     client = make_app().test_client()
 
-    page = client.get("/")
-    assert page.status_code == 503
-    message = _soup(page).select_one('[data-testid="db-unavailable"]').get_text(" ", strip=True)
-    assert message.startswith("Database not initialized: the worker creates the tables when it starts.")
+    _assert_initializing_page(client.get("/"))
     status = client.get("/api/status")
-    assert status.status_code == 503 and status.get_json() == {"error": "database not initialized"}
-    assert "Analysis page: database not initialized" in caplog.text
+    assert status.status_code == 503 and status.get_json() == {"error": "database initializing"}
+    assert "Analysis page: database initializing" in caplog.text
+    assert not any(record.exc_info for record in caplog.records)  # expected: a warning, no traceback
+
+
+@pytest.mark.parametrize(
+    ("message", "reason"),
+    [
+        ('connection to server at "db" (172.18.0.2), port 5432 failed: FATAL:  '
+         'password authentication failed for user "gradcafe_web"', "database initializing"),
+        ('connection to server on socket "/tmp/.s.PGSQL.5432" failed: FATAL:  '
+         'role "gradcafe_web" does not exist', "database initializing"),
+        ('connection to server at "127.0.0.1", port 1 failed: Connection refused', "database unavailable"),
+        ('connection to server at "db", port 5432 failed: FATAL:  database "gradcafe" does not exist',
+         "database unavailable"),
+    ],
+    ids=["password-refused", "role-missing", "refused", "database-missing"],
+)
+def test_login_refusal_means_initializing_other_connection_errors_unavailable(message, reason):
+    assert app_db.db_error_message(psycopg2.OperationalError(message)) == reason
 
 
 def test_unexpected_error_with_debug_off_has_no_traceback(make_app, db_conn, tables):

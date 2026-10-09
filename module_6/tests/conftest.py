@@ -70,9 +70,11 @@ def _read_test_database_url():
     return url
 
 
-# Roles are cluster-wide, so the tests use their own app role name and a
-# throwaway password: setup_roles can never touch the dev gradcafe_app role.
-TEST_APP_ROLE = "gradcafe_app_test"
+# Roles are cluster-wide, so the tests use their own web role name and a
+# throwaway password (web_role_env): setup_roles never touches a dev gradcafe_web.
+TEST_WEB_ROLE = "gradcafe_web_test"
+# Unset for the whole run, so worker startup never creates a role unless a test asks.
+UNSET_FOR_RUN = ("WEB_DB_USER", "WEB_DB_PASSWORD")
 
 
 def pytest_configure(config):
@@ -81,12 +83,12 @@ def pytest_configure(config):
     test_env = {
         "DATABASE_URL": test_url,
         "RABBITMQ_URL": TEST_RABBITMQ_URL,
-        "APP_DB_USER": TEST_APP_ROLE,
-        "APP_DB_PASSWORD": secrets.token_urlsafe(16),
     }
-    for name in test_env:
+    for name in (*test_env, *UNSET_FOR_RUN):
         _saved_env[name] = os.environ.get(name, _UNSET)
     os.environ.update(test_env)
+    for name in UNSET_FOR_RUN:
+        os.environ.pop(name, None)
 
 
 def pytest_unconfigure(config):
@@ -493,3 +495,17 @@ def role_url(test_database_url, role, password):
 def channel(broker):
     """A channel on the fake broker, for driving consumer.process_message() directly."""
     return FakeChannel(broker, FakeConnection(broker, None))
+
+
+@pytest.fixture
+def web_role_env(monkeypatch, db_conn):
+    """WEB_DB_USER/WEB_DB_PASSWORD set to the test role and a throwaway password.
+
+    Yields the password; the role is dropped before and after the test.
+    """
+    password = secrets.token_urlsafe(16)
+    monkeypatch.setenv("WEB_DB_USER", TEST_WEB_ROLE)
+    monkeypatch.setenv("WEB_DB_PASSWORD", password)
+    drop_role(db_conn, TEST_WEB_ROLE)  # a leftover copy from an interrupted run
+    yield password
+    drop_role(db_conn, TEST_WEB_ROLE)

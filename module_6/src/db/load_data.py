@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS {} (
 # One row per ingestion source: the highest Grad Cafe result ID (the <id> in
 # /result/<id>) ingested so far. Result IDs grow with Date Added, so the
 # incremental scraper treats any entry at or below it as already loaded.
-WATERMARKS = sql.Identifier("ingestion_watermarks")
+WATERMARKS_TABLE = "ingestion_watermarks"
+WATERMARKS = sql.Identifier(WATERMARKS_TABLE)
 WATERMARK_SOURCE = "gradcafe_survey"
 CREATE_WATERMARKS_SQL = sql.SQL(
     """
@@ -98,7 +99,8 @@ ADVANCE_WATERMARK_SQL = sql.SQL(
 
 # The analysis snapshot the web page renders: a single row (id = 1) that the
 # worker replaces. JSON rather than JSONB, so the stored key order is kept.
-SUMMARY = sql.Identifier("analysis_summary")
+SUMMARY_TABLE = "analysis_summary"
+SUMMARY = sql.Identifier(SUMMARY_TABLE)
 CREATE_SUMMARY_SQL = sql.SQL(
     """
 CREATE TABLE IF NOT EXISTS {} (
@@ -117,7 +119,10 @@ STORE_SUMMARY_SQL = sql.SQL(
     "row_count = EXCLUDED.row_count, computed_at = now()"
 ).format(SUMMARY)
 
-# pg_advisory_xact_lock key serialising initialize_database() across workers.
+# Every table initialize_database() creates.
+ALL_TABLES = (APPLICANTS_TABLE, WATERMARKS_TABLE, SUMMARY_TABLE)
+
+# pg_advisory_xact_lock key serialising initialize_database() (and role setup) across workers.
 INIT_LOCK_KEY = 605256006
 
 RESULT_URL_PATTERN = re.compile(r"/result/(\d+)$")
@@ -245,17 +250,24 @@ def connect(database_url=None):
     return psycopg2.connect(url)
 
 
-TABLE_MISSING_MESSAGE = "applicants table missing; run load_data.py as the database owner"
-
-
 class TableMissingError(RuntimeError):
-    """The applicants table doesn't exist yet (setup_roles.py needs it to grant privileges on)."""
+    """A table setup_roles.py grants privileges on doesn't exist yet."""
 
 
-def table_exists_query():
-    """SELECT to_regclass(<applicants>): the table's name if it exists, else NULL."""
+def table_exists_query(table=APPLICANTS_TABLE):
+    """SELECT to_regclass(<table>): the table's name if it exists, else NULL."""
     stmt = sql.SQL("SELECT to_regclass(%s) LIMIT %s")
-    return stmt, [APPLICANTS_TABLE, clamp_limit(SINGLE_ROW)]
+    return stmt, [table, clamp_limit(SINGLE_ROW)]
+
+
+def missing_tables(cur, tables):
+    """The names in `tables` that don't exist in cur's database, in the given order."""
+    missing = []
+    for table in tables:
+        cur.execute(*table_exists_query(table))
+        if cur.fetchone()[0] is None:
+            missing.append(table)
+    return missing
 
 
 def applicants_table_exists(cur):

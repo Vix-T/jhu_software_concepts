@@ -5,7 +5,8 @@ Python path for load_data and sql_utils). At startup it:
 
 1. connects to $DATABASE_URL and runs load_data.initialize_database()
    (creates the tables; seeds an empty applicants table from $SEED_JSON),
-2. computes the analysis summary if there is none yet,
+2. computes the analysis summary if there is none yet, and creates/updates
+   the web service's read-only role when WEB_DB_USER/WEB_DB_PASSWORD are set,
 3. connects to $RABBITMQ_URL (heartbeat 600 s, so a long scrape doesn't
    drop the connection), declares the same durable topology as
    publisher.py, sets prefetch_count=1, and consumes "tasks_q".
@@ -32,6 +33,7 @@ from psycopg2 import sql
 from selenium.common.exceptions import WebDriverException
 
 import load_data
+import setup_roles
 from etl import incremental_scraper, query_data
 from etl.incremental_scraper import PullPreconditionError, ScrapeRetriesExhausted
 from sql_utils import SINGLE_ROW, clamp_limit
@@ -191,7 +193,7 @@ def on_message(db_conn, channel, method, _properties, body):
 
 
 def prepare_database(db_conn):
-    """Create/seed the tables, then compute the summary if there is none yet (commits)."""
+    """Create/seed the tables, compute a missing summary, set up the web role (commits)."""
     seeded = load_data.initialize_database(db_conn)
     logger.info("Schema ready: applicants, ingestion_watermarks, analysis_summary")
     if seeded is None:
@@ -206,6 +208,22 @@ def prepare_database(db_conn):
                 logger.info("Computed the initial analysis summary (Q1 = %s)", summary["q1_count"])
             else:
                 logger.info("Analysis summary already present: not recomputed")
+    setup_web_role(db_conn)
+
+
+def setup_web_role(db_conn):
+    """Create/update the web service's read-only role when WEB_DB_USER/WEB_DB_PASSWORD are set.
+
+    Neither set: skipped (the web then needs another database user). Only one
+    set: ConfigError, which stops the worker with a message.
+    """
+    settings = setup_roles.web_role_from_env()
+    if settings is None:
+        logger.info("WEB_DB_USER/WEB_DB_PASSWORD not set: web role not set up")
+        return
+    role, password = settings
+    setup_roles.apply_role_setup(db_conn, role, password)
+    logger.info("Web role %s ready: SELECT on %s", role, ", ".join(setup_roles.READ_TABLES))
 
 
 def broker_parameters():

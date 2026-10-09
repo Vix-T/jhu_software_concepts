@@ -7,6 +7,7 @@ and every statement is a psycopg2.sql composed object with values (LIMIT
 included) as bound parameters.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -22,7 +23,8 @@ UNDEFINED_TABLE = psycopg2.errors.lookup(psycopg2.errorcodes.UNDEFINED_TABLE)
 # Database failures every read route reports as 503, and what it says about each.
 DB_READ_ERRORS = (psycopg2.OperationalError, UNDEFINED_TABLE, INSUFFICIENT_PRIVILEGE)
 DB_UNAVAILABLE = "database unavailable"
-DB_NOT_INITIALIZED = "database not initialized"
+# The worker has not finished its first start: tables, seed, summary and web role.
+DB_INITIALIZING = "database initializing"
 DB_PERMISSION_DENIED = "database permission denied"
 
 WATERMARK_SOURCE = "gradcafe_survey"
@@ -36,12 +38,26 @@ LAST_PULL_QUERY = sql.SQL("SELECT updated_at FROM {} WHERE source = %s LIMIT %s"
 )
 
 
+# The server refused the web role's login: on a first start the worker hasn't created
+# the role yet. psycopg2 gives connection failures no SQLSTATE, so this matches the
+# server's message. (A wrong WEB_DB_PASSWORD reads the same way, and so also shows as
+# "initializing" -- the server doesn't tell the two apart.)
+LOGIN_REFUSED = re.compile(r'password authentication failed for user|role "[^"]*" does not exist')
+
+
 def db_error_message(exc):
-    """The short reason a DB_READ_ERRORS exception is reported with."""
+    """The short reason a DB_READ_ERRORS exception is reported with.
+
+    Missing tables and a refused login mean the worker's first start isn't
+    done yet (DB_INITIALIZING); anything else that stops the connection is
+    DB_UNAVAILABLE.
+    """
     if isinstance(exc, UNDEFINED_TABLE):
-        return DB_NOT_INITIALIZED
+        return DB_INITIALIZING
     if isinstance(exc, INSUFFICIENT_PRIVILEGE):
         return DB_PERMISSION_DENIED
+    if LOGIN_REFUSED.search(str(exc)):
+        return DB_INITIALIZING
     return DB_UNAVAILABLE
 
 

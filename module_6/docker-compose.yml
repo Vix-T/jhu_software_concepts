@@ -6,7 +6,10 @@
 # The defaults are dev-only credentials; override them through the environment
 # (or a .env next to this file) for anything shared.
 
+# The worker connects as the owner (it creates tables, loads and writes data); the web
+# service as the read-only role the worker creates at startup (SELECT on three tables).
 x-database-url: &database-url "postgresql://${POSTGRES_USER:-gradcafe}:${POSTGRES_PASSWORD:-gradcafe_dev_only}@db:5432/${POSTGRES_DB:-gradcafe}"
+x-web-database-url: &web-database-url "postgresql://${WEB_DB_USER:-gradcafe_web}:${WEB_DB_PASSWORD:-gradcafe_web_dev_only}@db:5432/${POSTGRES_DB:-gradcafe}"
 x-rabbitmq-url: &rabbitmq-url "amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/%2F"
 
 x-depends-on-backends: &depends-on-backends
@@ -50,7 +53,8 @@ services:
   web:
     build: ./src/web
     environment:
-      DATABASE_URL: *database-url
+      # Until the worker has created this role (first start), the web answers 503.
+      DATABASE_URL: *web-database-url
       RABBITMQ_URL: *rabbitmq-url
       PYTHONUNBUFFERED: "1"
     ports:
@@ -68,6 +72,9 @@ services:
       DATABASE_URL: *database-url
       RABBITMQ_URL: *rabbitmq-url
       SEED_JSON: /data/applicant_data.json
+      # The web service's read-only role, created/updated by the worker at startup.
+      WEB_DB_USER: ${WEB_DB_USER:-gradcafe_web}
+      WEB_DB_PASSWORD: ${WEB_DB_PASSWORD:-gradcafe_web_dev_only}
       # Chrome with remote debugging on the host; resolved to an IP before attaching.
       CHROME_DEBUGGER_ADDRESS: ${CHROME_DEBUGGER_ADDRESS:-host.docker.internal:9222}
       # load_data.py, sql_utils.py and setup_roles.py come from the read-only db mount.

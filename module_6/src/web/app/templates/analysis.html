@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  {% if initializing %}
+  <meta http-equiv="refresh" content="5">
+  {% endif %}
   <title>Grad Café Applicant Data — Analysis</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
@@ -29,10 +32,10 @@
   </header>
 
   <main>
-    {% if db_error %}
+    {% if initializing %}
+    <p class="db-initializing" data-testid="db-initializing">{{ db_error }}</p>
+    {% elif db_error %}
     <p class="db-unavailable" data-testid="db-unavailable">{{ db_error }}</p>
-    {% elif snapshot.results is none %}
-    <p class="not-computed" data-testid="not-computed">Analysis not computed yet. Click Update Analysis to queue it for the worker.</p>
     {% else %}
     <section class="question">
       <h2>Q1</h2>

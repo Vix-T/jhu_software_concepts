@@ -14,7 +14,15 @@ import runpy
 
 import psycopg2
 import pytest
-from conftest import PULL_PAGE_URLS, DriverFactory, deliver_method, make_record, pull_pages, result_url
+from conftest import (
+    PULL_PAGE_URLS,
+    TEST_WEB_ROLE,
+    DriverFactory,
+    deliver_method,
+    make_record,
+    pull_pages,
+    result_url,
+)
 from pika.exceptions import AMQPConnectionError
 
 import consumer
@@ -249,6 +257,49 @@ def test_restart_skips_seed_and_keeps_summary(broker, db_conn, seed, seed_json, 
     assert "applicants already has rows: seed skipped" in caplog.text
     assert "Analysis summary already present: not recomputed" in caplog.text
     assert "Seeded applicants" not in caplog.text
+
+
+def test_startup_sets_up_the_web_role_when_configured(db_conn, seed_json, web_role_env, caplog):
+    caplog.set_level(logging.INFO, logger="consumer")
+
+    consumer.prepare_database(db_conn)
+
+    with db_conn, db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT table_name, privilege_type FROM information_schema.role_table_grants "
+            "WHERE grantee = %s ORDER BY 1",
+            (TEST_WEB_ROLE,),
+        )
+        assert cur.fetchall() == [
+            ("analysis_summary", "SELECT"), ("applicants", "SELECT"), ("ingestion_watermarks", "SELECT"),
+        ]
+    assert (
+        f"Web role {TEST_WEB_ROLE} ready: SELECT on applicants, ingestion_watermarks, analysis_summary"
+        in caplog.text
+    )
+    consumer.prepare_database(db_conn)  # every restart re-applies it (ALTER ROLE): no error
+
+
+def test_startup_skips_the_web_role_when_not_configured(db_conn, seed_json, caplog):
+    caplog.set_level(logging.INFO, logger="consumer")
+
+    consumer.prepare_database(db_conn)
+
+    with db_conn, db_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM pg_roles WHERE rolname = %s", (TEST_WEB_ROLE,))
+        assert cur.fetchone()[0] == 0
+    assert "WEB_DB_USER/WEB_DB_PASSWORD not set: web role not set up" in caplog.text
+
+
+def test_half_configured_web_role_stops_the_worker(broker, seed_json, monkeypatch, capsys):
+    monkeypatch.setenv("WEB_DB_USER", TEST_WEB_ROLE)
+
+    with pytest.raises(SystemExit) as excinfo:
+        consumer.main()
+
+    assert excinfo.value.code == 1
+    assert capsys.readouterr().out.startswith("Worker stopped: Missing web role setting(s): WEB_DB_PASSWORD.")
+    assert broker.consumers == []
 
 
 def test_script_entry_point_runs_main(broker, seed_json):

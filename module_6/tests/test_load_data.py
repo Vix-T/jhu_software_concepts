@@ -192,3 +192,12 @@ def test_connect_without_any_url_is_config_error(monkeypatch, value):
 
     with pytest.raises(load_data.ConfigError, match=r"^DATABASE_URL is not set \(see \.env\.example\)\.$"):
         load_data.connect()
+
+
+def test_load_rows_creates_a_missing_applicants_table(db_conn, fetch_rows):
+    with db_conn, db_conn.cursor() as cur:
+        cur.execute("DROP TABLE applicants")
+
+    assert load_data.load_rows([make_record(0)], db_conn) == (1, 0, [])
+
+    assert [row["url"] for row in fetch_rows()] == [make_record(0)["URL"]]

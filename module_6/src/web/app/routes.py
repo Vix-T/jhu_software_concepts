@@ -28,7 +28,7 @@ from app.applicant_search import (
 )
 from app.config import ConfigError
 from app.db import (
-    DB_NOT_INITIALIZED,
+    DB_INITIALIZING,
     DB_PERMISSION_DENIED,
     DB_READ_ERRORS,
     DB_UNAVAILABLE,
@@ -50,9 +50,9 @@ PAGE_DB_MESSAGES = {
         "Database unavailable: the analysis could not be loaded. Check that PostgreSQL "
         "is running and DATABASE_URL is correct, then reload this page."
     ),
-    DB_NOT_INITIALIZED: (
-        "Database not initialized: the worker creates the tables when it starts. "
-        "Start the worker, then reload this page."
+    DB_INITIALIZING: (
+        "The database is being initialised. The first start loads about 60,000 rows "
+        "and takes around a minute. This page refreshes automatically."
     ),
     DB_PERMISSION_DENIED: (
         "Database permission denied: the web service's database user cannot read the analysis."
@@ -64,22 +64,50 @@ def _database_url():
     return current_app.config["DATABASE_URL"]
 
 
+def _log_db_error(where, reason):
+    """Log a database read failure; called from its except block.
+
+    Initialisation is expected on a first start (and the page polls through
+    it), so it's a one-line warning; anything else is logged with its traceback.
+    """
+    if reason == DB_INITIALIZING:
+        logger.warning("%s: %s", where, reason)
+    else:
+        logger.exception("%s: %s", where, reason)
+
+
+def _db_error_page(reason):
+    """The page with `reason`'s message in place of the analysis, as a 503.
+
+    While initialising, the page refreshes itself every few seconds.
+    """
+    page = render_template(
+        "analysis.html",
+        db_error=PAGE_DB_MESSAGES[reason],
+        initializing=reason == DB_INITIALIZING,
+        snapshot=None,
+    )
+    return page, 503
+
+
 def analysis():
-    """GET / and /analysis: the analysis page (503 with a message if the database can't be read)."""
+    """GET / and /analysis: the analysis page (503 with a message until it can be shown)."""
     try:
         snapshot = read_snapshot(_database_url())
     except DB_READ_ERRORS as exc:
         reason = db_error_message(exc)
-        logger.exception("Analysis page: %s", reason)
-        page = render_template("analysis.html", db_error=PAGE_DB_MESSAGES[reason], snapshot=None)
-        return page, 503
+        _log_db_error("Analysis page", reason)
+        return _db_error_page(reason)
+    if snapshot.results is None:  # tables exist, the first summary isn't stored yet
+        logger.warning("Analysis page: %s (no analysis summary yet)", DB_INITIALIZING)
+        return _db_error_page(DB_INITIALIZING)
     return render_template(
         "analysis.html",
         db_error=None,
         snapshot=snapshot,
         computed_at_iso=utc_iso(snapshot.computed_at),
         last_pulled_iso=utc_iso(snapshot.last_pulled_at),
-        **(snapshot.results or {}),
+        **snapshot.results,
     )
 
 
@@ -112,7 +140,7 @@ def api_status():
         snapshot = read_snapshot(_database_url())
     except DB_READ_ERRORS as exc:
         reason = db_error_message(exc)
-        logger.exception("Status: %s", reason)
+        _log_db_error("Status", reason)
         return jsonify(error=reason), 503
     return jsonify(
         computed_at=utc_iso(snapshot.computed_at),
@@ -141,7 +169,7 @@ def api_applicants():
         rows = run_applicants_query(stmt, params, _database_url())
     except DB_READ_ERRORS as exc:
         reason = db_error_message(exc)
-        logger.exception("Applicant search: %s", reason)
+        _log_db_error("Applicant search", reason)
         return jsonify(error=reason), 503
     return jsonify(count=len(rows), limit=limit, sort=sort, order=order, rows=rows)
 

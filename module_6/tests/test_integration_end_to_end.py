@@ -49,10 +49,10 @@ def test_update_analysis_end_to_end(client, broker, channel, db_conn, seed):
         make_record(2, **{"Semester and Year": "Fall 2026", "International/American": "American"}),
         make_record(3, **{"Semester and Year": "Fall 2025", "Applicant Status": "Rejected"}),
     ])
-    assert "Analysis not computed yet" in _page_text(client)
+    assert client.get("/analysis").status_code == 503  # no summary yet: the initialising page
 
     assert client.post("/update-analysis").status_code == 202
-    assert "Analysis not computed yet" in _page_text(client)  # nothing changes until the worker runs
+    assert client.get("/analysis").status_code == 503  # nothing changes until the worker runs
     _run_worker(db_conn, channel, broker, consumer.TASKS)
 
     assert broker.acks == [1]
