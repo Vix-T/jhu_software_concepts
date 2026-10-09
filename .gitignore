@@ -72,5 +72,11 @@ module_5/CLAUDE.md
 module_5/venv/
 module_5/docs/build/html/.doctrees/
 
+# Module 6 local-only files (.env already covered by the global rule above)
+module_6/CLAUDE.md
+module_6/.env
+module_6/venv/
+module_6/docs/build/html/.doctrees/
+
 # setuptools metadata from the editable install (pip/uv install -e .)
 *.egg-info/

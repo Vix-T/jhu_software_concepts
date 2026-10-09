@@ -1,0 +1,21 @@
+# Top-level dependencies for module_6. requirements.txt is the fully pinned
+# lock generated from this file; regenerate it with:
+#   uv pip compile requirements.in -o requirements.txt --universal --python-version 3.12
+
+# Runtime (imported by src/)
+beautifulsoup4==4.15.0
+Flask==3.1.3
+psycopg2-binary==2.9.13
+python-dotenv==1.2.3
+selenium==4.48.0
+SQLAlchemy==2.0.54
+
+# Testing, linting, dependency graph
+pytest==9.1.1
+pytest-cov==7.1.0
+pylint==4.1.2
+pydeps==3.0.9
+
+# Documentation build
+sphinx==9.1.0
+sphinx-rtd-theme==3.1.0
