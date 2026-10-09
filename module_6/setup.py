@@ -21,7 +21,7 @@ setup(
         "Grad Cafe applicant analytics: PostgreSQL loader, analysis queries "
         "and a Flask app (EN.605.256 Module 6)"
     ),
-    python_requires=">=3.12",
+    python_requires=">=3.11",
     package_dir={"": "src"},
     py_modules=[
         "applicant_search",
