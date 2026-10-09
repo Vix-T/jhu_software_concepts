@@ -192,15 +192,3 @@ def test_connect_without_any_url_is_config_error(monkeypatch, value):
 
     with pytest.raises(load_data.ConfigError, match=r"^DATABASE_URL is not set \(see \.env\.example\)\.$"):
         load_data.connect()
-
-
-def test_ensure_table_creates_a_missing_applicants_table(db_conn, test_database_url):
-    with db_conn, db_conn.cursor() as cur:
-        cur.execute("DROP TABLE applicants")
-
-    load_data.ensure_table(test_database_url)
-    load_data.ensure_table(test_database_url)  # already there: no error
-
-    with db_conn, db_conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('applicants')")
-        assert cur.fetchone()[0] == "applicants"

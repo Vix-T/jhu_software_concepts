@@ -23,8 +23,6 @@ from sql_utils import (
     APPLICANT_COLUMNS,
     APPLICANTS,
     APPLICANTS_TABLE,
-    INSUFFICIENT_PRIVILEGE,
-    MAX_LIMIT,
     SINGLE_ROW,
     clamp_limit,
 )
@@ -85,6 +83,10 @@ CREATE TABLE IF NOT EXISTS {} (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 """
+).format(WATERMARKS)
+
+LOCKED_WATERMARK_SQL = sql.SQL(
+    "SELECT last_seen FROM {} WHERE source = %s LIMIT %s FOR UPDATE"
 ).format(WATERMARKS)
 
 # Never moves the watermark backwards; updated_at records every advance attempt.
@@ -247,7 +249,7 @@ TABLE_MISSING_MESSAGE = "applicants table missing; run load_data.py as the datab
 
 
 class TableMissingError(RuntimeError):
-    """The applicants table doesn't exist and the connected role isn't allowed to create it."""
+    """The applicants table doesn't exist yet (setup_roles.py needs it to grant privileges on)."""
 
 
 def table_exists_query():
@@ -256,69 +258,22 @@ def table_exists_query():
     return stmt, [APPLICANTS_TABLE, clamp_limit(SINGLE_ROW)]
 
 
+def applicants_table_exists(cur):
+    """True if the applicants table exists in cur's database (to_regclass)."""
+    cur.execute(*table_exists_query())
+    return cur.fetchone()[0] is not None
+
+
 def create_table(conn):
     """Create the applicants table on `conn` if it doesn't exist yet (commits).
 
-    Checks to_regclass() first and only runs CREATE TABLE when the table is
-    missing, so a role without CREATE on the schema (the app role) never
-    attempts DDL against a table that already exists. If the table is
-    missing and the role may not create it, raises TableMissingError.
+    Checks first and only runs CREATE TABLE when the table is missing, so an
+    existing table never sees DDL.
     """
     with conn:
         with conn.cursor() as cur:
-            stmt, params = table_exists_query()
-            cur.execute(stmt, params)
-            if cur.fetchone()[0] is not None:
-                return
-            try:
+            if not applicants_table_exists(cur):
                 cur.execute(CREATE_TABLE_SQL)
-            except INSUFFICIENT_PRIVILEGE as exc:
-                logger.error("Cannot create the applicants table as %s: %s", conn.info.user, exc)
-                raise TableMissingError(TABLE_MISSING_MESSAGE) from exc
-
-
-def ensure_table(database_url=None):
-    """Create the applicants table in database_url (default: $DATABASE_URL) if needed."""
-    conn = connect(database_url)
-    try:
-        create_table(conn)
-    finally:
-        conn.close()
-
-
-def existing_urls_query(batch):
-    """SELECT the URLs of `batch` (at most MAX_LIMIT candidates) that are already stored.
-
-    url is UNIQUE, so at most len(batch) rows can match: LIMIT len(batch)
-    never cuts off a real match.
-    """
-    stmt = sql.SQL("SELECT {url} FROM {table} WHERE {url} = ANY(%s) LIMIT %s").format(
-        url=sql.Identifier("url"), table=APPLICANTS
-    )
-    return stmt, [list(batch), clamp_limit(len(batch))]
-
-
-def existing_urls(urls, database_url=None):
-    """Return the subset of `urls` already present in the applicants table.
-
-    Only the candidate URLs are looked up, in batches of at most MAX_LIMIT.
-    """
-    urls = list(urls)
-    if not urls:
-        return set()
-    found = set()
-    conn = connect(database_url)
-    try:
-        create_table(conn)
-        with conn:
-            with conn.cursor() as cur:
-                for start in range(0, len(urls), MAX_LIMIT):
-                    stmt, params = existing_urls_query(urls[start:start + MAX_LIMIT])
-                    cur.execute(stmt, params)
-                    found.update(row[0] for row in cur.fetchall())
-    finally:
-        conn.close()
-    return found
 
 
 def insert_rows(cur, records):
@@ -408,6 +363,18 @@ def result_id(url):
     return int(match.group(1)) if match else None
 
 
+def locked_watermark(cur, source=WATERMARK_SOURCE):
+    """`source`'s watermark (None if it has none), row-locked until the transaction ends.
+
+    SELECT ... FOR UPDATE: a second scrape of the same source waits here
+    until the first one commits or rolls back, so two scrapes never run on
+    the same starting point.
+    """
+    cur.execute(LOCKED_WATERMARK_SQL, [source, clamp_limit(SINGLE_ROW)])
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
 def advance_watermark(cur, last_seen, source=WATERMARK_SOURCE):
     """Raise `source`'s watermark to `last_seen` (never lowers it), in the caller's transaction."""
     cur.execute(ADVANCE_WATERMARK_SQL, [source, last_seen])
@@ -456,8 +423,8 @@ def read_seed(seed_path):
     return records
 
 
-def seed_watermark(records, failed):
-    """Highest result ID among the seed records that loaded, or None if none has one."""
+def highest_result_id(records, failed=()):
+    """Highest result ID among `records` that loaded (not listed in `failed`), or None."""
     failed_indexes = {index for index, _ in failed}
     ids = [
         result_id(record.get("URL"))
@@ -494,7 +461,7 @@ def initialize_database(conn, seed_path=None):
                 return None
             records = read_seed(seed_path)
             inserted, skipped, failed = insert_rows(cur, records)
-            watermark = seed_watermark(records, failed)
+            watermark = highest_result_id(records, failed)
             if watermark is not None:
                 advance_watermark(cur, watermark)
     logger.info("Seeded applicants from %s: %d inserted", seed_path, inserted)

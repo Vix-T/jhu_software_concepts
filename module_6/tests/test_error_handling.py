@@ -1,12 +1,11 @@
-"""Specific exception handling: missing settings, bad files, row-level DB errors, denied access.
+"""Specific exception handling: missing settings, row-level DB errors, denied access.
 
 Everything runs against the real test database. (The web page's own
-database-failure handling is in test_web_page.py; publish failures in
-test_web_buttons.py.)
+database-failure handling is in test_web_page.py, publish failures in
+test_web_buttons.py, and the worker's in test_consumer.py.)
 """
 
 import json
-import logging
 
 import psycopg2
 import pytest
@@ -14,7 +13,6 @@ from psycopg2 import sql
 from conftest import database_name, drop_role, make_record, make_records, role_url
 
 import load_data
-import pull_data
 from app import create_app
 
 pytestmark = [pytest.mark.buttons, pytest.mark.db]
@@ -36,43 +34,6 @@ def test_load_data_cli_reports_missing_database_url(monkeypatch, tmp_path, capsy
     assert excinfo.value.code == 1
     out = capsys.readouterr().out
     assert out == "LOAD FAILED: DATABASE_URL is not set (see .env.example).\n"
-
-
-def test_pull_cli_records_missing_database_url(monkeypatch, pull_result_path, capsys):
-    monkeypatch.delenv("DATABASE_URL")
-
-    with pytest.raises(SystemExit) as excinfo:
-        pull_data.main(scraper=lambda: make_records(1))
-
-    assert excinfo.value.code == 1
-    assert capsys.readouterr().out == "PULL FAILED: ConfigError: DATABASE_URL is not set (see .env.example).\n"
-    assert json.loads(pull_result_path.read_text())["ok"] is False
-
-
-# ---------------------------------------------------------------------------
-# Pull result files
-# ---------------------------------------------------------------------------
-
-
-def test_child_result_replaces_pending_record(tmp_path):
-    path = tmp_path / "result.json"
-    pull_data.write_pull_result(str(path), pull_data.pending_result())
-    pull_data.write_pull_result(str(path), pull_data.pull_result(run={"inserted": 4}))
-
-    assert pull_data.settle_pull_result(str(path), running=False)["inserted"] == 4
-
-
-@pytest.mark.parametrize("kind", ["bad_utf8", "directory"])
-def test_unreadable_result_file_is_no_result(pull_result_path, caplog, kind):
-    if kind == "bad_utf8":
-        pull_result_path.write_bytes(b"\xff\xfe not utf-8")
-    else:
-        pull_result_path.mkdir()
-
-    with caplog.at_level(logging.DEBUG, logger="pull_data"):
-        assert pull_data.read_pull_result(str(pull_result_path)) is None
-
-    assert "No readable pull result" in caplog.text
 
 
 # ---------------------------------------------------------------------------

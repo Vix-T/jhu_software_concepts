@@ -11,9 +11,10 @@ from conftest import make_record
 pytestmark = pytest.mark.analysis
 
 SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
-# The scripts import load_data / sql_utils from src/db, which is found on the path, not
-# next to the script: the subprocess gets both import roots, as a deployment would.
-SCRIPT_PYTHONPATH = os.pathsep.join([SRC_DIR, os.path.join(SRC_DIR, "db")])
+QUERY_DATA_PY = os.path.join(SRC_DIR, "worker", "etl", "query_data.py")
+# The script imports load_data / sql_utils from src/db, which is found on the path, not
+# next to the script: the subprocess gets that root, as the worker's deployment will.
+SCRIPT_PYTHONPATH = os.path.join(SRC_DIR, "db")
 
 
 def _row(i, term, nationality, status, degree, university, gpa, gre="165", llm_university=None):
@@ -97,12 +98,12 @@ def seeded(seed):
 
 
 def test_query_data_main_output(seeded, capsys):
-    runpy.run_path(os.path.join(SRC_DIR, "query_data.py"), run_name="__main__")
+    runpy.run_path(QUERY_DATA_PY, run_name="__main__")
     assert capsys.readouterr().out == QUERY_DATA_MAIN_OUTPUT
 
 
 def test_query_data_main_on_empty_table(capsys):
-    runpy.run_path(os.path.join(SRC_DIR, "query_data.py"), run_name="__main__")
+    runpy.run_path(QUERY_DATA_PY, run_name="__main__")
 
     out = capsys.readouterr().out
     assert "Fall 2026 applicant count: 0\n" in out
@@ -116,7 +117,7 @@ def test_query_data_main_on_empty_table(capsys):
 
 def test_cli_exits_cleanly_on_empty_table(test_database_url):
     result = subprocess.run(
-        [sys.executable, os.path.join(SRC_DIR, "query_data.py")],
+        [sys.executable, QUERY_DATA_PY],
         env={**os.environ, "DATABASE_URL": test_database_url, "PYTHONPATH": SCRIPT_PYTHONPATH},
         capture_output=True,
         text=True,

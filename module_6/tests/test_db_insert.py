@@ -1,8 +1,6 @@
-"""Rows written by a pull, dedup on URL, and the stored analysis summary."""
+"""Rows written by the loader, dedup on URL, and the stored analysis summary."""
 
 import pytest
-
-import pull_data
 
 pytestmark = pytest.mark.db
 
@@ -22,11 +20,11 @@ ANALYSIS_KEYS = {
 }
 
 
-def test_pull_inserts_rows_with_required_fields(scraper, real_loader, row_count, fetch_rows, fake_records):
+def test_loader_inserts_rows_with_required_fields(real_loader, row_count, fetch_rows, fake_records):
     assert row_count() == 0
 
-    result = pull_data.run_pull(scraper, real_loader)
-    assert result["inserted"] == len(fake_records)
+    inserted, skipped, failed = real_loader(fake_records)
+    assert (inserted, skipped, failed) == (len(fake_records), 0, [])
 
     rows = fetch_rows()
     assert len(rows) == len(fake_records)
@@ -35,18 +33,16 @@ def test_pull_inserts_rows_with_required_fields(scraper, real_loader, row_count,
         assert set(row) == MODULE3_FIELDS
         for field in MODULE3_FIELDS - LLM_FIELDS:
             assert row[field] is not None, field
-        # A pull never runs the LLM-cleaning step (Module 3 design).
+        # Scraped records carry no LLM-cleaned fields (Module 3 design).
         for field in LLM_FIELDS:
             assert row[field] is None, field
 
 
-def test_pull_twice_idempotent(scraper, real_loader, row_count, fake_records):
-    first = pull_data.run_pull(scraper, real_loader)
-    assert first["inserted"] == len(fake_records)
+def test_loading_twice_is_idempotent(real_loader, row_count, fake_records):
+    assert real_loader(fake_records)[0] == len(fake_records)
     count_after_first = row_count()
 
-    second = pull_data.run_pull(scraper, real_loader)
-    assert (second["inserted"], second["skipped"]) == (0, len(fake_records))
+    assert real_loader(fake_records)[:2] == (0, len(fake_records))
     assert row_count() == count_after_first
 
 

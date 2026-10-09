@@ -36,8 +36,8 @@ from psycopg2 import sql
 from selenium.common.exceptions import NoSuchElementException
 
 import load_data
-import query_data
 from app import create_app
+from etl import query_data
 
 ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
@@ -135,14 +135,6 @@ def _empty_applicants(db_conn):
         cur.execute("TRUNCATE applicants RESTART IDENTITY")
 
 
-@pytest.fixture(autouse=True)
-def pull_result_path(tmp_path, monkeypatch):
-    """Per-test pull result file: apps, pull_data.main() and CLI runs never touch src/."""
-    path = tmp_path / "pull_result.json"
-    monkeypatch.setenv("PULL_RESULT_FILE", str(path))
-    return path
-
-
 @pytest.fixture
 def row_count(db_conn):
     def count():
@@ -207,21 +199,6 @@ def make_record(i, **overrides):
 
 def make_records(n, start=0, **overrides):
     return [make_record(i, **overrides) for i in range(start, start + n)]
-
-
-class FakeScraper:
-    """Stands in for pull_data.scrape_new_entries: returns fixed records, or raises."""
-
-    def __init__(self, records=(), raises=None):
-        self.records = list(records)
-        self.raises = raises
-        self.calls = 0
-
-    def __call__(self):
-        self.calls += 1
-        if self.raises is not None:
-            raise self.raises
-        return list(self.records)
 
 
 class Spy:
@@ -314,11 +291,6 @@ def fake_records():
 
 
 @pytest.fixture
-def scraper(fake_records):
-    return FakeScraper(fake_records)
-
-
-@pytest.fixture
 def real_loader(test_database_url):
     def loader(records):
         return load_data.load_into_database(records, test_database_url)
@@ -392,6 +364,20 @@ class FakeBroker:
         self.channel_error = None
         self.publish_error = None
         self.publish_drops_connection = False
+        # Consumer side: what the worker asks for, and messages to deliver to it.
+        self.qos = []
+        self.consumers = []
+        self.deliveries = []  # (body, redelivered) pairs; start_consuming() delivers them in order
+        self.acks = []
+        self.nacks = []
+        self.ack_hook = None  # called with the delivery tag just before an ack is recorded
+        self.consume_hook = None  # called when the worker registers its consumer
+
+    def deliver(self, body, redelivered=False):
+        """Queue a message body (dict -> JSON) for the next start_consuming()."""
+        if isinstance(body, dict):
+            body = json.dumps(body).encode()
+        self.deliveries.append((body, redelivered))
 
     def bodies(self):
         return [json.loads(message["body"]) for message in self.published]
@@ -413,6 +399,29 @@ class FakeChannel:
 
     def confirm_delivery(self):
         self.broker.confirm_calls += 1
+
+    def basic_qos(self, **kwargs):
+        self.broker.qos.append(kwargs)
+
+    def basic_consume(self, **kwargs):
+        if self.broker.consume_hook is not None:
+            self.broker.consume_hook()
+        self.broker.consumers.append(kwargs)
+
+    def start_consuming(self):
+        """Deliver every queued message to the registered callback, then return."""
+        [consumer] = self.broker.consumers
+        for tag, (body, redelivered) in enumerate(self.broker.deliveries, start=1):
+            consumer["on_message_callback"](self, deliver_method(tag, redelivered), pika.BasicProperties(), body)
+        self.broker.deliveries = []
+
+    def basic_ack(self, delivery_tag):
+        if self.broker.ack_hook is not None:
+            self.broker.ack_hook(delivery_tag)
+        self.broker.acks.append(delivery_tag)
+
+    def basic_nack(self, delivery_tag, requeue=True):
+        self.broker.nacks.append((delivery_tag, requeue))
 
     def basic_publish(self, **kwargs):
         if self.broker.publish_error is not None:
@@ -444,6 +453,13 @@ class FakeConnection:
         self.is_open = False
 
 
+def deliver_method(tag, redelivered=False):
+    """The real pika method frame a consumer callback receives."""
+    return pika.spec.Basic.Deliver(
+        consumer_tag="test", delivery_tag=tag, redelivered=redelivered, exchange="tasks", routing_key="tasks"
+    )
+
+
 @pytest.fixture
 def broker(monkeypatch):
     fake = FakeBroker()
@@ -471,3 +487,9 @@ def role_url(test_database_url, role, password):
     host = parts.netloc.rpartition("@")[2]
     netloc = f"{quote(role, safe='')}:{quote(password, safe='')}@{host}"
     return urlunsplit(parts._replace(netloc=netloc))
+
+
+@pytest.fixture
+def channel(broker):
+    """A channel on the fake broker, for driving consumer.process_message() directly."""
+    return FakeChannel(broker, FakeConnection(broker, None))

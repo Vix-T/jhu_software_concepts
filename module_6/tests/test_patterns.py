@@ -7,7 +7,7 @@ both count, while word boundaries still reject look-alikes.
 import pytest
 from conftest import make_record
 
-import query_data
+from etl import query_data
 
 pytestmark = pytest.mark.analysis
 

@@ -35,8 +35,8 @@ from load_data import (
     TABLE_MISSING_MESSAGE,
     ConfigError,
     TableMissingError,
+    applicants_table_exists,
     connect,
-    table_exists_query,
 )
 from sql_utils import APPLICANTS_TABLE, SINGLE_ROW, clamp_limit
 
@@ -163,9 +163,7 @@ def apply_role_setup(conn, role, password, table=APPLICANTS_TABLE):
     dbname = conn.info.dbname
     with conn:
         with conn.cursor() as cur:
-            stmt, params = table_exists_query()
-            cur.execute(stmt, params)
-            if cur.fetchone()[0] is None:
+            if not applicants_table_exists(cur):
                 raise TableMissingError(f"{TABLE_MISSING_MESSAGE} before running setup_roles.py")
             catalog = read_catalog(cur, role, table)
             for statement in build_role_statements(role, password, dbname, table, catalog=catalog):

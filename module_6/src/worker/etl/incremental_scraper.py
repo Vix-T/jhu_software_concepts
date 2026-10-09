@@ -1,16 +1,31 @@
-"""
-Scrapes graduate school applicant self-reported data from The Grad Cafe
-(thegradcafe.com) survey results pages.
+"""Incremental Grad Cafe scraper for the worker's scrape_new_data task.
 
-Uses urllib3 to fetch raw HTML pages, Selenium to drive a browser for any
-pages requiring JavaScript rendering or interaction, and BeautifulSoup to
-parse the resulting HTML into structured applicant entry records.
+scrape_newest() walks the survey results pages newest first, keeping
+entries whose URL is_known() doesn't report, and stops at the first page
+with nothing new (everything older is already loaded), once target_count
+new entries are collected, or at the end of pagination. The worker's
+is_known is known_by_watermark(): an entry is known when its result ID
+(the <id> in /result/<id>) is at or below the ingestion watermark.
+
+Grad Cafe sits behind a Cloudflare challenge that must be cleared by hand,
+so the scraper never launches a browser: it attaches to a Chrome already
+running with remote debugging, at CHROME_DEBUGGER_ADDRESS (host:port,
+default 127.0.0.1:9222). Chrome's DevTools endpoint rejects requests whose
+Host header is a name other than localhost, so any other hostname (e.g.
+host.docker.internal from inside a container) is resolved to an IP before
+attaching. If nothing is listening there, scrape_new_entries() fails fast
+with PullPreconditionError instead of letting Selenium hang.
+
+Pages are parsed in memory with BeautifulSoup; nothing is written to disk.
+A browser crash mid-scrape (WebDriverException) re-attaches and retries the
+same page, up to BrowserSettings.max_retries times in a row.
 """
 
-import glob
-import json
+import ipaddress
+import logging
 import os
 import re
+import socket
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -23,7 +38,28 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-DEBUGGER_ADDRESS = "127.0.0.1:9222"
+import load_data
+
+logger = logging.getLogger(__name__)
+
+DEBUGGER_ENV = "CHROME_DEBUGGER_ADDRESS"
+DEFAULT_DEBUGGER_ADDRESS = "127.0.0.1:9222"
+# Seconds the pre-flight connect to the debugger port may take.
+PORT_CHECK_TIMEOUT = 3
+# Upper bound on new entries collected by one scrape, so a single task stays
+# short even after a long gap. Normally a scrape stops much earlier, at the
+# first page with nothing new.
+TARGET_COUNT = 300
+
+CLOUDFLARE_PRECONDITION_MESSAGE = (
+    "PULL FAILED: could not attach to Chrome for scraping.\n"
+    "This scraper requires a Chrome browser already running with remote "
+    "debugging enabled (--remote-debugging-port), reachable at "
+    "CHROME_DEBUGGER_ADDRESS, with Grad Cafe's Cloudflare challenge already "
+    "manually cleared in that session -- it does not launch or solve anything "
+    "itself. Start that session first, then click Pull Data again."
+)
+
 SURVEY_URL = "https://www.thegradcafe.com/survey/"
 RESULTS_TABLE_SELECTOR = "tbody.tw-divide-y.tw-divide-gray-200.tw-bg-white"
 SITE_ROOT = "https://www.thegradcafe.com"
@@ -69,8 +105,7 @@ class BrowserSettings:
     """How survey pages are fetched: where to start, pacing, and crash handling.
 
     Attributes:
-        start_url: The survey URL to start from (when there is no saved
-            capture state to resume from).
+        start_url: The survey URL to start from (the first, newest results page).
         delay_seconds: Seconds to sleep between page loads, to avoid
             hammering the site.
         wait_timeout: Seconds to wait for each page's results table before
@@ -93,36 +128,6 @@ class BrowserSettings:
     def new_driver(self):
         """Attach a fresh browser session (driver_factory, default attach_to_chrome)."""
         return (self.driver_factory or attach_to_chrome)()
-
-
-@dataclass(frozen=True)
-class CaptureFiles:
-    """Where capture_pages() keeps its resumability state and the raw page HTML.
-
-    Attributes:
-        state_file: JSON file holding {"next_url": ..., "pages_captured": ...}.
-        captured_dir: Directory the raw pages are saved into, as
-            page_00001.html, page_00002.html, etc.
-    """
-
-    state_file: str = "_scrape_state.json"
-    captured_dir: str = "_captured_pages"
-
-    def resume_point(self, start_url):
-        """(next_url, pages_captured) from state_file, or (start_url, 0) for a fresh capture."""
-        if not os.path.exists(self.state_file):
-            return start_url, 0
-        with open(self.state_file, "r", encoding="utf-8") as f:
-            state = json.load(f)
-        return state["next_url"], state["pages_captured"]
-
-    def save_page(self, pages_captured, page_source, next_url):
-        """Write one captured page's HTML and the updated resumability state."""
-        page_path = os.path.join(self.captured_dir, f"page_{pages_captured:05d}.html")
-        with open(page_path, "w", encoding="utf-8") as f:
-            f.write(page_source)
-        with open(self.state_file, "w", encoding="utf-8") as f:
-            json.dump({"next_url": next_url, "pages_captured": pages_captured}, f)
 
 
 @dataclass
@@ -154,18 +159,6 @@ def _wait_for_results_table(driver, url, wait_timeout):
             f"Results table never appeared for {url} "
             "(page may be blank/failed) — continuing anyway"
         )
-
-
-def attach_to_chrome():
-    """Default driver factory: attach to an already-running, verified Chrome session.
-
-    Grad Cafe sits behind a Cloudflare challenge that must be cleared
-    manually, so the scraper never launches its own browser; it attaches
-    to one started with --remote-debugging-port=9222.
-    """
-    options = Options()
-    options.add_experimental_option("debuggerAddress", DEBUGGER_ADDRESS)
-    return ChromeWebDriver(options=options)
 
 
 def _load_page(driver, url, wait_timeout):
@@ -200,116 +193,6 @@ def _load_with_retries(session, url, browser):
             continue
         session.crashes = 0
         return html
-
-
-def _capture_stop_reason(next_url, current_url, pages_captured, target_pages):
-    """Why capturing should stop after this page, or None to keep going."""
-    if next_url is None:
-        return "no next-page link found"
-    if next_url == current_url:
-        return "next_url did not advance from the current page"
-    if target_pages is not None and pages_captured >= target_pages:
-        return "reached target_pages"
-    return None
-
-
-def capture_pages(browser=None, files=None, target_pages=None):
-    """
-    Capture raw HTML for Grad Cafe survey result pages, without parsing them.
-
-    Page capture is kept separate from parsing so that a bug in the
-    parsing logic (_group_entry_rows/_parse_entry/etc.) never requires
-    re-scraping the live site to fix — the raw HTML for every page
-    visited is saved to files.captured_dir, and parse_captured_pages() can
-    be re-run against those saved files as many times as needed after a
-    fix, independent of any live browser session.
-
-    Resumability:
-        Like the original combined scrape, a capture run can be
-        interrupted partway through. Progress is persisted to
-        files.state_file after every page as {"next_url": ...,
-        "pages_captured": ...}. On startup, if state_file exists,
-        capturing resumes from its "next_url" (continuing the running
-        "pages_captured" count used for output filenames) instead of
-        starting over from browser.start_url. If the previously saved
-        state already recorded next_url as None (meaning a prior run
-        reached the last page), this call captures nothing and returns 0
-        immediately.
-
-    Args:
-        browser: BrowserSettings (start_url, delay_seconds, wait_timeout,
-            driver_factory); default BrowserSettings().
-        files: CaptureFiles (state_file, captured_dir); default CaptureFiles().
-        target_pages: If not None, stop once pages_captured reaches this
-            count (a cumulative count that persists across resumed
-            calls, not necessarily the number of pages captured in this
-            particular call).
-
-    Returns:
-        int: The number of new pages captured during this call (not the
-            cumulative total across all resumed runs).
-    """
-    browser = browser or BrowserSettings()
-    files = files or CaptureFiles()
-    os.makedirs(files.captured_dir, exist_ok=True)
-
-    next_url, pages_captured = files.resume_point(browser.start_url)
-    pages_captured_this_run = 0
-
-    if next_url is None:
-        stop_reason = "no next-page link found (already at the last page)"
-    else:
-        driver = browser.new_driver()
-        current_url = next_url
-        page_source = _load_page(driver, current_url, browser.wait_timeout)
-
-        while True:
-            pages_captured += 1
-            pages_captured_this_run += 1
-            next_url = _extract_next_url(BeautifulSoup(page_source, "html.parser"))
-            files.save_page(pages_captured, page_source, next_url)
-
-            stop_reason = _capture_stop_reason(next_url, current_url, pages_captured, target_pages)
-            if stop_reason is not None:
-                break
-
-            time.sleep(browser.delay_seconds)
-            current_url = next_url
-            page_source = _load_page(driver, current_url, browser.wait_timeout)
-
-    print(f"Pages captured this run: {pages_captured_this_run}")
-    print(f"Stopped because: {stop_reason}")
-
-    return pages_captured_this_run
-
-
-def parse_captured_pages(captured_dir="_captured_pages"):
-    """
-    Parse all previously captured Grad Cafe result pages into entry records.
-
-    Operates entirely on local HTML files already saved by capture_pages()
-    (page_*.html inside captured_dir) — it never touches a live browser
-    session, so it can be re-run as many times as needed (e.g. after
-    fixing a bug in _parse_entry()) without re-scraping the site.
-
-    Args:
-        captured_dir: Directory containing the captured page_*.html files.
-
-    Returns:
-        list: The full flat list of parsed, filtered applicant entry
-            records across all captured pages.
-    """
-    page_paths = sorted(glob.glob(os.path.join(captured_dir, "page_*.html")))
-
-    all_entries = []
-    for page_path in page_paths:
-        with open(page_path, "r", encoding="utf-8") as f:
-            all_entries.extend(parse_page(f.read()))
-
-    print(f"Pages read: {len(page_paths)}")
-    print(f"Total valid entries parsed: {len(all_entries)}")
-
-    return all_entries
 
 
 def parse_page(html):
@@ -407,95 +290,6 @@ def scrape_newest(is_known, browser=None, target_count=300):
         f"stopped because {stop_reason}."
     )
     return new_entries
-
-
-def scrape_data(browser=None, files=None, target_count=60000, batch_size=150):
-    """
-    Scrape Grad Cafe survey results end-to-end, until target_count entries
-    have been collected.
-
-    This is a convenience wrapper around capture_pages() and
-    parse_captured_pages(), built with crash resilience in mind: real
-    overnight runs showed that a single long, uncapped capture_pages()
-    call is fragile against the attached Chrome/Selenium session
-    crashing partway through (observed as InvalidSessionIdException and
-    WebDriverException after a few hundred to a couple thousand pages).
-    Rather than one uncapped run, pages are captured in batches of
-    batch_size at a time. Between batches this function re-reads
-    state_file and re-parses everything captured so far, so a crash in
-    one batch can never lose more than that batch's progress — and
-    typically loses none, since capture_pages() itself persists
-    next_url/pages_captured to state_file after every single page, not
-    just at the end of a batch. If a batch call raises a session/driver
-    crash, it's caught here, a short wait is taken, and the loop simply
-    tries again: the next capture_pages() call re-attaches to Chrome
-    (via its own debuggerAddress attach logic) and resumes from
-    state_file's last saved position. This makes multi-hour scrapes safe
-    to kick off and leave unattended. A batch that keeps crashing is retried
-    at most browser.max_retries times in a row; after that
-    ScrapeRetriesExhausted is raised instead of looping forever.
-
-    capture_pages() and parse_captured_pages() are also fully usable on
-    their own: e.g. parse_captured_pages() can be re-run by itself,
-    without a browser at all, after fixing a parsing bug, to re-derive
-    entries from HTML that was already captured in an earlier run.
-
-    Args:
-        browser: BrowserSettings, passed through to capture_pages(); its
-            crash_retry_wait and max_retries also govern batch retries.
-        files: CaptureFiles (state_file, captured_dir); default CaptureFiles().
-        target_count: Stop once at least this many parsed entries exist
-            across all captured pages.
-        batch_size: Number of new pages to request per capture_pages()
-            call.
-
-    Returns:
-        list: The full flat list of parsed applicant entry records.
-    """
-    browser = browser or BrowserSettings()
-    files = files or CaptureFiles()
-    crashes = 0
-    while True:
-        current_pages_captured = files.resume_point(None)[1]
-
-        try:
-            capture_pages(browser, files, target_pages=current_pages_captured + batch_size)
-        except WebDriverException as exc:
-            crashes += 1
-            if crashes > browser.max_retries:
-                raise _retries_exhausted(crashes, exc) from exc
-            print(
-                f"Browser session crashed during batch starting at page "
-                f"{current_pages_captured + 1} (target "
-                f"{current_pages_captured + batch_size}): {exc}"
-            )
-            print(
-                "State was preserved up to the last successfully captured "
-                "page; retrying with a fresh browser attach."
-            )
-            time.sleep(browser.crash_retry_wait)
-            continue
-
-        crashes = 0
-        entries = parse_captured_pages(captured_dir=files.captured_dir)
-
-        with open(files.state_file, "r", encoding="utf-8") as f:
-            state = json.load(f)
-
-        print(
-            f"Progress: {state['pages_captured']} pages captured, "
-            f"{len(entries)} entries parsed so far."
-        )
-
-        if state["next_url"] is None:
-            print("Reached natural end of available pages.")
-            break
-
-        if len(entries) >= target_count:
-            print(f"Target of {target_count} entries reached.")
-            break
-
-    return parse_captured_pages(captured_dir=files.captured_dir)
 
 
 def _extract_next_url(soup):
@@ -670,3 +464,109 @@ def _filter_valid_entries(parsed_entries):
         for entry in parsed_entries
         if entry["University"] is not None and entry["University"].strip() != ""
     ]
+
+
+class PullPreconditionError(RuntimeError):
+    """No usable Chrome debugging session: bad address, unknown host, or nothing listening."""
+
+
+def _is_ip_literal(host):
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def _attachable_host(host):
+    """`host` as Chrome's DevTools endpoint accepts it: an IP literal or "localhost".
+
+    Any other hostname is resolved to an IPv4 address; PullPreconditionError
+    if it can't be resolved.
+    """
+    if host == "localhost" or _is_ip_literal(host):
+        return host
+    try:
+        return socket.gethostbyname(host)
+    except OSError as exc:  # socket.gaierror: unknown host, or no DNS
+        logger.error("Cannot resolve the Chrome debugger host %r: %s", host, exc)
+        raise PullPreconditionError(f"cannot resolve Chrome debugger host {host!r}: {exc}") from exc
+
+
+def debugger_address():
+    """(host, port) to attach to, from $CHROME_DEBUGGER_ADDRESS (default 127.0.0.1:9222).
+
+    The host comes back as an IP literal or "localhost" (see
+    _attachable_host). Raises PullPreconditionError if the setting isn't
+    host:port or the host can't be resolved.
+    """
+    text = os.environ.get(DEBUGGER_ENV, "").strip() or DEFAULT_DEBUGGER_ADDRESS
+    host, separator, port_text = text.rpartition(":")
+    if not separator or not host or not port_text.isdigit():
+        raise PullPreconditionError(f"{DEBUGGER_ENV} must be host:port, got {text!r}")
+    return _attachable_host(host), int(port_text)
+
+
+def attach_to_chrome():
+    """Default driver factory: attach to the already-running, verified Chrome session."""
+    host, port = debugger_address()
+    options = Options()
+    options.add_experimental_option("debuggerAddress", f"{host}:{port}")
+    return ChromeWebDriver(options=options)
+
+
+def _debugger_port_open(host, port):
+    """Fast pre-flight check so a missing Chrome session fails in milliseconds.
+
+    Without it, Selenium's own setup was observed to hang for 30+ seconds
+    when nothing listens on the debugger port. A raw socket connect to the
+    same address fails (or succeeds) almost at once.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(PORT_CHECK_TIMEOUT)
+        try:
+            s.connect((host, port))
+        except OSError:
+            return False
+        return True
+
+
+def chrome_is_listening():
+    """True if something accepts connections at CHROME_DEBUGGER_ADDRESS."""
+    return _debugger_port_open(*debugger_address())
+
+
+def known_by_watermark(watermark):
+    """is_known(urls) for scrape_newest(): the URLs whose result ID is at or below `watermark`.
+
+    With no watermark (None) nothing is known. URLs without a result ID are
+    never known; ON CONFLICT (url) DO NOTHING keeps them from being stored twice.
+    """
+
+    def is_known(urls):
+        if watermark is None:
+            return set()
+        known = set()
+        for url in urls:
+            rid = load_data.result_id(url)
+            if rid is not None and rid <= watermark:
+                known.add(url)
+        return known
+
+    return is_known
+
+
+def scrape_new_entries(
+    watermark, target_count=TARGET_COUNT, browser=None, port_check=chrome_is_listening
+):
+    """Scrape the Grad Cafe entries newer than `watermark` (a result ID, or None), newest first.
+
+    browser is a BrowserSettings, passed through to scrape_newest(). With the
+    default driver_factory (attach to the real Chrome session), port_check()
+    runs first and PullPreconditionError is raised if it reports nothing
+    listening; a caller-supplied driver_factory skips it.
+    """
+    browser = browser or BrowserSettings()
+    if browser.driver_factory is None and not port_check():
+        raise PullPreconditionError(CLOUDFLARE_PRECONDITION_MESSAGE)
+    return scrape_newest(known_by_watermark(watermark), browser, target_count=target_count)

@@ -215,14 +215,12 @@ def test_web_search_works_as_the_role(app_role, seed):
     assert api.status_code == 200 and api.get_json()["count"] == 2
 
 
-def test_role_cannot_create_a_missing_table(app_role, owner_conn, caplog):
+def test_role_cannot_create_a_missing_table(app_role, owner_conn):
     with owner_conn, owner_conn.cursor() as cur:
         cur.execute("DROP TABLE applicants")  # the autouse fixture recreates it for the next test
 
-    with pytest.raises(load_data.TableMissingError, match=TABLE_MISSING_MESSAGE):
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege, match="permission denied for schema public"):
         load_data.load_into_database(make_records(1), app_role[1])
-
-    assert "Cannot create the applicants table as gradcafe_app_test" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +294,7 @@ def test_main_unreachable_database(monkeypatch, capsys):
 
 
 def test_script_entry_point_runs_main(owner_conn, capsys):
-    script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "setup_roles.py")
+    script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "db", "setup_roles.py")
     drop_role(owner_conn, TEST_APP_ROLE)
     try:
         runpy.run_path(script, run_name="__main__")

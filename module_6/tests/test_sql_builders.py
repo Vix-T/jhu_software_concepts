@@ -10,7 +10,7 @@ from conftest import make_records
 from psycopg2 import sql
 
 import load_data
-import query_data
+from etl import query_data
 from app.applicant_search import build_applicants_query, escape_like
 from sql_utils import MAX_LIMIT
 
@@ -75,23 +75,6 @@ def test_insert_and_create_are_composed_without_limit(db_conn):
     assert load_data.SAVEPOINT_SQL.as_string(db_conn) == 'SAVEPOINT "load_row"'
     assert load_data.ROLLBACK_TO_SAVEPOINT_SQL.as_string(db_conn) == 'ROLLBACK TO SAVEPOINT "load_row"'
     assert load_data.RELEASE_SAVEPOINT_SQL.as_string(db_conn) == 'RELEASE SAVEPOINT "load_row"'
-
-
-def test_existing_urls_query_limit_is_batch_size(db_conn):
-    batch = ["https://example.test/a", "https://example.test/b", "https://example.test/c"]
-    stmt, params = load_data.existing_urls_query(batch)
-
-    assert stmt.as_string(db_conn) == 'SELECT "url" FROM "applicants" WHERE "url" = ANY(%s) LIMIT %s'
-    assert params == [batch, 3]
-
-
-def test_existing_urls_checks_candidates_in_batches(seed, test_database_url):
-    seed(make_records(120))
-    candidates = [r["URL"] for r in make_records(250)]  # 0-119 stored, 120-249 new
-
-    found = load_data.existing_urls(candidates, test_database_url)
-
-    assert found == set(candidates[:120])  # matches from the 1st and 2nd batch of 100
 
 
 @pytest.mark.parametrize(

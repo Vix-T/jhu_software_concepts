@@ -10,7 +10,7 @@ import pytest
 from bs4 import BeautifulSoup
 from conftest import make_record
 
-import query_data
+from etl import query_data
 
 pytestmark = pytest.mark.analysis
 
