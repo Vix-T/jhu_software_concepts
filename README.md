@@ -46,4 +46,13 @@ included inside that folder.
   `module_5/README.md` for setup and `module_5/module_5_report.pdf` for
   the report.
 
+- **[module_6](./module_6)** — The Grad Café analytics app as a Docker
+  Compose stack: PostgreSQL, RabbitMQ, a Flask web service that queues tasks
+  and reads the stored analysis as a read-only database role, and a worker
+  that seeds the database, scrapes new entries incrementally through the
+  host's Chrome session, and recomputes the analysis. Images are published on
+  [Docker Hub](https://hub.docker.com/r/vixbot/module_6), and GitHub Actions
+  runs Pylint and Pytest for the module. See `module_6/README.md` for setup
+  and `module_6/module_6_report.pdf` for the report.
+
 More modules will be added here as the semester progresses.

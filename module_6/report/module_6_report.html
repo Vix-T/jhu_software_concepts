@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Module 6 Report — Grad Café Analytics on Docker Compose</title>
+<style>
+  @page { size: Letter; margin: 0.6in 0.65in; }
+  body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; font-size: 10.5pt; line-height: 1.42; color: #1d2733; }
+  h1 { font-size: 19pt; margin: 0 0 4px; color: #10243e; }
+  h2 { font-size: 13.5pt; margin: 20px 0 6px; color: #10243e; border-bottom: 1px solid #c9d3de; padding-bottom: 3px; break-after: avoid; }
+  h3 { font-size: 11.5pt; margin: 14px 0 4px; color: #10243e; break-after: avoid; }
+  .meta { color: #45525f; margin: 0 0 12px; }
+  .meta a { color: #1d4f91; }
+  code, pre { font-family: Menlo, "SF Mono", Consolas, monospace; font-size: 8.8pt; }
+  code { background: #eef2f6; padding: 0 3px; border-radius: 3px; }
+  pre { background: #f3f6f9; border: 1px solid #dbe2e9; border-radius: 4px; padding: 7px 9px; white-space: pre-wrap; word-break: break-word; break-inside: avoid; }
+  table { border-collapse: collapse; width: 100%; margin: 6px 0 10px; font-size: 9.4pt; break-inside: avoid; }
+  th, td { border: 1px solid #cfd8e2; padding: 4px 6px; text-align: left; vertical-align: top; }
+  th { background: #e8eef4; }
+  ol, ul { margin: 4px 0 8px; padding-left: 22px; }
+  li { margin: 2px 0; }
+  figure { margin: 10px 0 14px; break-inside: avoid; }
+  figure img { display: block; max-width: 100%; max-height: 4.6in; margin: 0 auto; border: 1px solid #c9d3de; }
+  figcaption { font-size: 9pt; color: #45525f; margin-top: 4px; text-align: center; }
+  .note { font-size: 9.4pt; color: #45525f; }
+</style>
+</head>
+<body>
+
+<h1>Module 6 — Grad Café Analytics on Docker Compose</h1>
+<p class="meta">
+  <strong>Vix Talbot</strong> (JHED: vtalbot1) · EN.605.256.82 Modern Software Concepts in Python<br>
+  Repository: <a href="https://github.com/Vix-T/jhu_software_concepts/tree/main/module_6">github.com/Vix-T/jhu_software_concepts/tree/main/module_6</a><br>
+  Docker Hub: <a href="https://hub.docker.com/r/vixbot/module_6">hub.docker.com/r/vixbot/module_6</a> (tags <code>web-v1</code>, <code>worker-v1</code>)
+</p>
+
+<h2>1. Overview</h2>
+<p>
+  Module 6 turns the Grad Café analytics app from Modules 3–5 into four cooperating containers. The web
+  service no longer scrapes, loads or computes anything: its two buttons publish tasks to RabbitMQ and return
+  at once, and a separate worker does all writing to PostgreSQL. The whole stack starts with one command on a
+  clean machine, the two application images are published on Docker Hub, and GitHub Actions runs Pylint and
+  Pytest for the module on Python 3.11. The development environment was Docker Desktop 4.47 (Engine 28.4.0,
+  Compose v2.39.4) on an Intel Mac.
+</p>
+
+<h2>2. Docker Compose architecture</h2>
+<table>
+  <tr><th>Service</th><th>Image</th><th>Role</th></tr>
+  <tr><td><code>db</code></td><td><code>postgres:16</code></td>
+      <td>Holds <code>applicants</code>, <code>ingestion_watermarks</code> and <code>analysis_summary</code> in the named volume
+      <code>pgdata</code>. Health check <code>pg_isready</code>. Its port is not published to the host.</td></tr>
+  <tr><td><code>rabbitmq</code></td><td><code>rabbitmq:3.13-management</code></td>
+      <td>Task queue. Health check <code>rabbitmq-diagnostics -q check_port_connectivity</code>, which passes only once the
+      AMQP listener accepts connections. Management UI published on port 15672.</td></tr>
+  <tr><td><code>web</code></td><td><code>vixbot/module_6:web-v1</code><br>(build <code>src/web</code>)</td>
+      <td>Flask app on 0.0.0.0:8080 (published). Reads the stored analysis and applicant rows; the buttons publish
+      tasks. Connects as the read-only role <code>gradcafe_web</code>.</td></tr>
+  <tr><td><code>worker</code></td><td><code>vixbot/module_6:worker-v1</code><br>(build <code>src/worker</code>)</td>
+      <td>Initialises the database at startup, then consumes <code>tasks_q</code>. Mounts <code>src/data</code> (seed JSON) and
+      <code>src/db</code> (shared database modules) read-only. <code>restart: unless-stopped</code>.</td></tr>
+</table>
+<p>
+  <code>web</code> and <code>worker</code> start only after <code>db</code> and <code>rabbitmq</code> report healthy
+  (<code>depends_on: condition: service_healthy</code>). Each image is built from its own folder, exactly as the assignment's
+  Dockerfiles give it (<code>python:3.11-slim</code>, requirements installed first, <code>USER 1000</code>). The worker image
+  also bakes in chromedriver for linux64 at build time (build argument <code>CHROMEDRIVER_VERSION</code>, default
+  <code>154.0.8037.92</code>) with only the four libraries it links against, so nothing is downloaded at runtime.
+  Every setting in <code>docker-compose.yml</code> has a development default (<code>${VAR:-default}</code>), so the stack
+  starts with no <code>.env</code>; the defaults are development-only credentials for a database that is not reachable
+  from outside the compose network, and a <code>.env</code> file overrides them.
+</p>
+
+<h2>3. RabbitMQ message flow</h2>
+<ol>
+  <li>The browser POSTs <code>/pull-data</code> or <code>/update-analysis</code>.</li>
+  <li><code>publisher.publish_task()</code> connects with <code>RABBITMQ_URL</code>, declares the durable direct exchange
+      <code>tasks</code>, the durable queue <code>tasks_q</code> and their binding (routing key <code>tasks</code>), turns on
+      publisher confirms, and publishes compact JSON <code>{"kind", "ts", "payload"}</code> with <code>delivery_mode=2</code>
+      and <code>mandatory=True</code>. The connection is closed in <code>finally</code>.</li>
+  <li>The route answers <b>202</b> <code>{"status": "queued", "task": ...}</code>, or <b>503</b> if the publish fails
+      (<code>pika.exceptions.AMQPError</code>, including an unroutable or nacked message) or <code>RABBITMQ_URL</code> is missing.</li>
+  <li>The page shows a "Request queued" banner; its script then polls <code>GET /api/status</code> every 2 seconds for up to
+      60 seconds and reloads the page when either timestamp ("Analysis last updated", "Data last updated") changes.</li>
+</ol>
+<table>
+  <tr><th>Task kind</th><th>Queued by</th><th>Worker handler</th></tr>
+  <tr><td><code>scrape_new_data</code></td><td>Pull Data</td>
+      <td><code>handle_scrape_new_data</code>: reads the watermark with <code>SELECT … FOR UPDATE</code> (or <code>payload["since"]</code>),
+      scrapes entries newer than it through the host's Chrome session, inserts them with <code>ON CONFLICT (url) DO NOTHING</code>,
+      advances the watermark with <code>GREATEST</code>, and recomputes the analysis — all in one transaction.</td></tr>
+  <tr><td><code>recompute_analytics</code></td><td>Update Analysis</td>
+      <td><code>handle_recompute_analytics</code>: runs every analysis query and replaces the single <code>analysis_summary</code> row.</td></tr>
+</table>
+
+<h2>4. Database initialisation</h2>
+<p>
+  At every start the worker runs <code>load_data.initialize_database()</code> under a PostgreSQL advisory lock, so two workers
+  starting together cannot both seed. It creates the three tables if they are missing and, only when <code>applicants</code> is
+  empty, loads <code>/data/applicant_data.json</code> (60,025 records; 60,024 rows load, one record has no URL) and sets the
+  watermark to the highest Grad Café result ID in the seed, 1,020,478. It then computes the analysis if none is stored, and
+  creates or updates the read-only role <code>gradcafe_web</code>: CONNECT, schema USAGE and SELECT on the three tables only.
+  Every run revokes the role's other privileges first, so re-running is idempotent. Until all of this has committed, the web
+  page answers 503 "The database is being initialised… This page refreshes automatically." and reloads every 5 seconds.
+</p>
+
+<h2>5. Worker behaviour</h2>
+<ul>
+  <li><b>Prefetch 1:</b> <code>basic_qos(prefetch_count=1)</code> — one unacknowledged message at a time.</li>
+  <li><b>One transaction per message:</b> the handler runs on the worker's connection; nothing is committed inside it.</li>
+  <li><b>Ack after commit:</b> the worker commits, then calls <code>basic_ack</code>. A test checks from a second database
+      connection, at the moment of the ack, that the data is already committed.</li>
+  <li><b>Nack without requeue:</b> a <code>try/finally</code> tracks whether the message was acked; if not, it rolls back and calls
+      <code>basic_nack(requeue=False)</code>. Expected failures (database errors, the browser failing or not being attached,
+      retries exhausted, a bad payload) are logged and the worker continues; malformed JSON, non-object bodies and unknown
+      kinds are rejected the same way. Anything unexpected propagates after that cleanup and stops the worker, which Docker
+      restarts.</li>
+  <li><b>Heartbeat 600 s</b> on the worker's RabbitMQ connection, so a long scrape does not drop it.</li>
+</ul>
+
+<h2>6. Verification</h2>
+<table>
+  <tr><th>Check</th><th>Result</th></tr>
+  <tr><td>Docker installed</td><td><code>docker run hello-world</code> succeeds (Figure 1).</td></tr>
+  <tr><td><code>docker compose config</code></td><td>Valid; every variable resolves to its default with no <code>.env</code>.</td></tr>
+  <tr><td>Clean first start (<code>down -v</code>, then <code>up --build -d</code>)</td><td><code>up</code> finished in 20 s; the page answered 503 while the
+      worker seeded, then 200 about 48 s later. Worker log: 60,024 rows inserted, watermark 1,020,478, initial analysis computed
+      (Q1 = 32,344). Worker and web restarts: 0.</td></tr>
+  <tr><td>All services up</td><td><code>db</code> and <code>rabbitmq</code> healthy, <code>web</code> on 8080, <code>worker</code> running (Figure 2).</td></tr>
+  <tr><td>Page</td><td><code>GET /</code> returns 200 with the analysis (Figure 3).</td></tr>
+  <tr><td>Update Analysis</td><td>202 <code>{"status":"queued","task":"recompute_analytics"}</code>; worker logged the task done; <code>computed_at</code>
+      moved from 18:01:28 to 18:12:48. In a browser the page showed the queued banner (Figure 4), then reloaded by itself
+      and showed the new "Analysis last updated" time.</td></tr>
+  <tr><td>Pull Data with no Chrome</td><td>202; worker logged <code>PullPreconditionError</code>, nacked without requeue and kept running (0 restarts);
+      <code>tasks_q</code> empty, 0 redelivered.</td></tr>
+  <tr><td>Pull Data with the host Chrome session</td><td>From inside the worker, <code>host.docker.internal</code> resolved to 192.168.65.254 and
+      <code>/json/version</code> returned Chrome/154. The pull read 3 pages and inserted 29 new rows; the watermark moved from 1,020,478 to
+      1,020,507 and the analysis was recomputed in the same transaction.</td></tr>
+  <tr><td>RabbitMQ topology</td><td>Exchange <code>tasks</code> (direct) and queue <code>tasks_q</code> both durable, bound with key <code>tasks</code>, one consumer
+      (Figures 5–8).</td></tr>
+  <tr><td>Non-root containers</td><td><code>id</code> shows uid 1000 in both <code>web</code> and <code>worker</code>.</td></tr>
+  <tr><td>Persistence</td><td><code>down</code> then <code>up -d</code> kept the volume: row count, watermark and analysis unchanged; worker logged
+      "applicants already has rows: seed skipped".</td></tr>
+  <tr><td>Read-only web role</td><td>Connected as <code>gradcafe_web</code>, SELECT works on all three tables; INSERT, UPDATE, DELETE and CREATE TABLE are
+      refused by PostgreSQL with permission errors.</td></tr>
+  <tr><td>Docker Hub</td><td>Repository public; <code>web-v1</code> and <code>worker-v1</code> pulled anonymously; the stack ran from the tagged images
+      (page 200, both buttons 202) (Figures 9–10).</td></tr>
+  <tr><td>Tests and lint</td><td>375 tests pass with 100% statement coverage; Pylint 10.00/10. GitHub Actions "Module 6 CI" is green on Python 3.11
+      (Figure 11).</td></tr>
+</table>
+
+<h3>Pulling and running the published images</h3>
+<pre>docker pull vixbot/module_6:web-v1
+docker pull vixbot/module_6:worker-v1
+
+git clone https://github.com/Vix-T/jhu_software_concepts.git
+cd jhu_software_concepts/module_6
+docker compose pull web worker
+docker compose up -d --no-build      # or: docker compose up --build</pre>
+<p class="note">Then open http://localhost:8080 (RabbitMQ management: http://localhost:15672, guest/guest, development only).
+  Pull Data additionally needs a Chrome started on the host with <code>--remote-debugging-port=9222</code> and the Grad Café
+  Cloudflare check cleared by hand; the README gives the exact command.</p>
+
+<h2>7. Known limitations</h2>
+<ul>
+  <li>A pull collects at most 300 new entries, newest first; if more arrived since the last pull, the older ones are skipped
+      and the advanced watermark means they are not fetched later.</li>
+  <li>Scraped rows have no LLM-standardised program/university fields, so questions that use those fields count seed rows only.</li>
+  <li>When the host sleeps, the RabbitMQ heartbeat lapses and the worker restarts on wake (observed twice overnight); no message is lost.</li>
+  <li>A wrong <code>WEB_DB_PASSWORD</code> looks the same to the web as a role not created yet, so the page keeps showing the initialising message.</li>
+  <li>The web service runs Flask's development server.</li>
+</ul>
+
+<h2>8. Screenshots</h2>
+
+<figure><img src="images/docker_hello_world.png" alt="docker run hello-world output">
+  <figcaption>Figure 1. Docker 28.4.0 and Compose v2.39.4 installed; <code>docker run hello-world</code> succeeds.</figcaption></figure>
+
+<figure><img src="images/compose_ps.png" alt="docker compose ps">
+  <figcaption>Figure 2. <code>docker compose ps</code>: db and rabbitmq healthy, web publishing 8080, worker running
+  (taken before the images were tagged for Docker Hub, hence the local image names).</figcaption></figure>
+
+<figure><img src="images/website.png" alt="Analysis page">
+  <figcaption>Figure 3. The analysis page at http://localhost:8080, rendered from the worker's stored analysis.</figcaption></figure>
+
+<figure><img src="images/queued_banner.png" alt="Request queued banner">
+  <figcaption>Figure 4. After pressing Update Analysis: the "Request queued: recompute_analytics" banner while the page waits for the worker.</figcaption></figure>
+
+<figure><img src="images/RMQ_overview.png" alt="RabbitMQ overview">
+  <figcaption>Figure 5. RabbitMQ management overview (RabbitMQ 3.13.7): no messages waiting.</figcaption></figure>
+
+<figure><img src="images/RMQ_queue_detail.png" alt="RabbitMQ tasks_q detail">
+  <figcaption>Figure 6. Queue <code>tasks_q</code>: durable, one consumer (the worker), nothing ready or unacknowledged.</figcaption></figure>
+
+<figure><img src="images/RMQ_queue.png" alt="RabbitMQ queues list">
+  <figcaption>Figure 7. Queues list: <code>tasks_q</code>, classic, durable (D), running.</figcaption></figure>
+
+<figure><img src="images/RMQ_exchanges.png" alt="RabbitMQ exchanges">
+  <figcaption>Figure 8. Exchanges: <code>tasks</code>, direct and durable, alongside RabbitMQ's built-in exchanges.</figcaption></figure>
+
+<figure><img src="images/dockerhub_repo.png" alt="Docker Hub repository">
+  <figcaption>Figure 9. Docker Hub repository <code>vixbot/module_6</code>, visibility Public.</figcaption></figure>
+
+<figure><img src="images/dockerhub_tags.png" alt="Docker Hub tags">
+  <figcaption>Figure 10. Tags <code>web-v1</code> and <code>worker-v1</code> (linux/amd64) with their pull commands.</figcaption></figure>
+
+<figure><img src="images/actions_green.png" alt="GitHub Actions">
+  <figcaption>Figure 11. GitHub Actions: Module 6 CI #1 green on commit 9fd9238, alongside the Module 5 (dependency graph, Snyk) and Module 4 workflows.</figcaption></figure>
+
+</body>
+</html>

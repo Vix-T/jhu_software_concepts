@@ -2,374 +2,316 @@
 
 Vix Talbot (JHED: vtalbot1)
 
-## Overview
+# Module 6 — Grad Café Analytics as a Docker Compose stack
 
-> **Module 6 baseline:** copied from Module 5; commands, paths and database names point at `module_6/` and `jhu_module6`, while the overview, deliverables, Snyk and CI sections still describe Module 5 and will be rewritten in a later stage.
+The Grad Café analytics app from Modules 3–5, split into containerised
+services. A Flask **web** service shows the analysis and queues work; a
+**worker** consumes that work from **RabbitMQ** and does all writing to
+**PostgreSQL**: seeding the 60,025-record dataset, scraping new Grad Café
+entries, and recomputing the analysis the page shows.
 
-Module 5 hardens the Grad Café analytics app from Modules 3 and 4. The app
-loads cleaned Grad Café applicant data (scraped and LLM-standardized in
-Module 2) into PostgreSQL, answers a fixed set of questions with both raw SQL
-(`query_data.py`) and the SQLAlchemy ORM (`orm_queries.py`), and shows them on
-a Flask page (`flask_app.py`) with "Pull Data" (fetch the newest entries) and
-"Update Analysis" (recompute the answers) buttons, plus a JSON search
-endpoint, `GET /api/applicants`.
+Images: [hub.docker.com/r/vixbot/module_6](https://hub.docker.com/r/vixbot/module_6)
+(`web-v1`, `worker-v1`). Repository:
+[github.com/Vix-T/jhu_software_concepts](https://github.com/Vix-T/jhu_software_concepts).
+The report is `module_6_report.pdf` (source: `report/module_6_report.html`).
 
-Module 5 adds:
+## Architecture
 
-* **Safe SQL:** every raw-SQL statement is composed with `psycopg2.sql`
-  (identifiers as `sql.Identifier`, values only as bound parameters), and
-  every `SELECT` has a clamped `LIMIT`.
-* **Configuration from environment variables** (`DB_*`, read from the
-  environment or `.env`), with no credentials in the code.
-* **Least privilege:** the app connects as `gradcafe_app`, which can only
-  `SELECT` and `INSERT` applicant rows.
-* **Code quality:** Pylint 10.00/10 with specific exception handling only.
-* **Packaging:** pinned `requirements.txt` and an editable `setup.py` install.
-* **Supply-chain checks:** a pydeps dependency graph, Snyk scans, and
-  GitHub Actions CI with four jobs.
+| Service | Image | Role |
+|---|---|---|
+| `db` | `postgres:16` | Stores `applicants`, `ingestion_watermarks` and `analysis_summary` in the named volume `pgdata`. Not published to the host. |
+| `rabbitmq` | `rabbitmq:3.13-management` | The task queue: durable direct exchange `tasks`, durable queue `tasks_q`, routing key `tasks`. Management UI on port 15672. |
+| `web` | `vixbot/module_6:web-v1` (built from `src/web`) | Flask app on port 8080. Reads the stored analysis; the buttons only publish tasks. Never scrapes or writes applicant data, and connects as a read-only database role. |
+| `worker` | `vixbot/module_6:worker-v1` (built from `src/worker`) | Initialises the database at startup, then consumes `tasks_q` and runs each task against PostgreSQL. |
 
-The report is `module_5_report.pdf` (source: `report/module_5_report.html`).
+Message flow for a button press:
 
-## Deliverables
+1. The browser POSTs `/pull-data` or `/update-analysis`.
+2. The web service publishes a persistent JSON message
+   `{"kind": ..., "ts": ..., "payload": {}}` to the `tasks` exchange (publisher
+   confirms on, `mandatory=True`) and answers **202** `{"status": "queued", "task": ...}`.
+3. RabbitMQ routes it to `tasks_q`. The worker takes one message at a time
+   (`prefetch_count=1`).
+4. The worker runs the task in **one database transaction**, commits, then acks.
+   If it fails, the transaction is rolled back and the message is nacked
+   without requeue; the worker carries on with the next message.
+5. The page's script polls `GET /api/status` and reloads when the worker has
+   changed the data (see [The two buttons](#the-two-buttons)).
 
-| Deliverable | Location (in `module_5/` unless noted) |
-|---|---|
-| Report (PDF) and its HTML source | `module_5_report.pdf`, `report/module_5_report.html` |
-| Application source | `src/` |
-| Test suite (307 tests, all marked) | `tests/`, `pytest.ini` |
-| Coverage report (100%) | `coverage_summary.txt` |
-| Pylint report (10.00/10) | `pylint_report.txt` |
-| Packaging | `setup.py` |
-| Dependencies | `requirements.in` (top level), `requirements.txt` (pinned lock) |
-| Environment template | `.env.example` |
-| Dependency graph | `dependency.svg` |
-| Snyk dependency scan | `snyk_test_output.txt`, `snyk-analysis.png` |
-| Snyk Code scan (extra credit) | `snyk_code_output.txt`, `snyk-code-analysis.png`, `SNYK_FINDINGS.md` |
-| Database privileges evidence | `db-privileges.png` |
-| CI workflow | `.github/workflows/ci.yml` (repository root; mirrored at `module_5/.github/workflows/ci.yml`) |
-| Green CI run screenshot | `actions_success.png` |
-| Sphinx source | `docs/source/` |
+## Prerequisites
 
-## Fresh Install
+* Docker with the Compose plugin (`docker compose`). Built and tested on
+  Docker Desktop 4.47 (Engine 28.4.0, Compose v2.39.4) on an Intel Mac (amd64).
+* Ports 8080 and 15672 free on the host. PostgreSQL's 5432 and RabbitMQ's
+  5672 are not published, so a local PostgreSQL on 5432 doesn't conflict.
+* For Pull Data only: Google Chrome on the host (see
+  [Pull Data precondition](#pull-data-precondition)).
 
-Prerequisites: Python 3.12, PostgreSQL (developed against 15, tested in CI
-against 16), and Graphviz (its `dot` command draws the dependency graph).
-
-The supported install is editable (`pip install -e .`): the code locates its
-templates, static files, `.env` and `data/` relative to `src/`, so the modules
-must be imported from `src/` itself rather than copied into site-packages.
-
-`requirements.in` lists the top-level dependencies; `requirements.txt` is the
-fully pinned lock generated from it (every transitive dependency included,
-since `uv pip sync` installs exactly what the lock lists and nothing else).
-It covers the app, the tests and coverage, Pylint, pydeps and the Sphinx
-build.
-
-Get the code, create the databases, and create `.env` from the template:
+## Quick start
 
 ```
 git clone https://github.com/Vix-T/jhu_software_concepts.git
 cd jhu_software_concepts/module_6
-createdb jhu_module6
+docker compose up --build
+```
+
+Then open http://localhost:8080. RabbitMQ's management UI is at
+http://localhost:15672 (user `guest`, password `guest`: development only).
+
+What to expect on a first start (measured from a clean volume): `docker compose up`
+brings `db` and `rabbitmq` up healthy, then starts `web` and `worker` (about
+20 seconds in total, after the images are built). The worker then creates the
+tables and loads the seed data in one transaction, which takes about 50
+seconds. Until it finishes, the page answers **503** with "The database is
+being initialised. The first start loads about 60,000 rows and takes around a
+minute. This page refreshes automatically.", and reloads itself every 5
+seconds. The analysis then appears (Fall 2026 applicant count 32,344 on the
+seed data). Later starts on the same volume skip the seed and are ready in
+seconds.
+
+`docker compose down` stops the stack and keeps the data;
+`docker compose down -v` also deletes the `pgdata` volume, so the next start
+seeds again.
+
+## Configuration
+
+Docker Compose reads these variables from the shell or from a `.env` file
+next to `docker-compose.yml`, and every one has a default:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `POSTGRES_USER` | `gradcafe` | Database owner; the worker connects as this user. |
+| `POSTGRES_PASSWORD` | `gradcafe_dev_only` | Owner password. |
+| `POSTGRES_DB` | `gradcafe` | Database name. |
+| `WEB_DB_USER` | `gradcafe_web` | Read-only role the worker creates and the web connects as. |
+| `WEB_DB_PASSWORD` | `gradcafe_web_dev_only` | Its password. |
+| `RABBITMQ_USER` | `guest` | RabbitMQ user (web and worker connect as it). |
+| `RABBITMQ_PASSWORD` | `guest` | Its password. |
+| `CHROME_DEBUGGER_ADDRESS` | `host.docker.internal:9222` | Where the worker attaches to Chrome (`host:port`). A hostname other than `localhost` is resolved to an IP first. |
+| `CHROMEDRIVER_VERSION` | `154.0.8037.92` | Build argument: the chromedriver baked into the worker image. |
+| `DOCKERHUB_USER` | `vixbot` | Namespace of the image tags. |
+
+**The credentials in `docker-compose.yml` are development-only defaults.** The
+database is reachable only inside the compose network (its port is not
+published), and RabbitMQ's `guest` account is the image's default. To use
+other values, put them in `module_6/.env` (git-ignored) before the first
+`docker compose up`, for example:
+
+```
+POSTGRES_PASSWORD=choose-a-password
+WEB_DB_PASSWORD=choose-another-password
+RABBITMQ_PASSWORD=choose-a-third-password
+```
+
+Compose substitutes them everywhere they are used, including the connection
+URLs it builds for `web` and `worker`. Per the `postgres` image's
+documentation, `POSTGRES_PASSWORD` is only applied when the volume is first
+initialised, so changing it later needs `docker compose down -v` (which
+deletes the data). `.env.example` lists every
+variable.
+
+Inside the containers the services read: `DATABASE_URL` and `RABBITMQ_URL`
+(both services; built by Compose from the variables above), `SEED_JSON`
+(`/data/applicant_data.json`), `WEB_DB_USER`/`WEB_DB_PASSWORD` and
+`CHROME_DEBUGGER_ADDRESS` (worker), and `FLASK_DEBUG` (web; `1` turns on the
+debugger, off by default). The worker image also sets
+`CHROMEDRIVER_PATH=/usr/local/bin/chromedriver` and `SE_OFFLINE=true`, so
+Selenium uses the baked-in driver and never downloads one.
+
+## The two buttons
+
+| Button | Endpoint | Task queued | Worker does |
+|---|---|---|---|
+| Pull Data | `POST /pull-data` | `scrape_new_data` | Scrapes Grad Café entries newer than the watermark, inserts them, advances the watermark and recomputes the analysis, all in one transaction. |
+| Update Analysis | `POST /update-analysis` | `recompute_analytics` | Recomputes every question and replaces the stored analysis. |
+
+Each answers **202** `{"status": "queued", "task": "<kind>"}` as soon as the
+message is published, or **503** `{"status": "error", ...}` if RabbitMQ can't
+be reached or doesn't confirm the message. After a 202 the page shows a
+"Request queued" banner; its script then polls `GET /api/status` every 2
+seconds for up to 60 seconds and reloads the page when "Analysis last updated"
+or "Data last updated" changes. Verified in a browser: after Update Analysis
+the page reloaded by itself and showed the new "Analysis last updated" time.
+
+The page also offers `GET /api/applicants` (applicant rows as JSON, with
+validated `limit`, `sort`, `order` and `university` parameters) and
+`GET /api/status`.
+
+## Pull Data precondition
+
+Grad Café is behind a Cloudflare check that has to be passed by hand, so the
+worker never starts a browser: it attaches to a Chrome you start on the host
+with remote debugging. The command used to test it on the Mac:
+
+```
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.chrome-gradcafe-debug" \
+  --no-first-run --no-default-browser-check \
+  "https://www.thegradcafe.com/survey/"
+```
+
+`--user-data-dir` keeps this debugging session in its own profile, separate
+from your everyday Chrome. In that window, complete the Cloudflare check,
+wait for the results table, and leave the window open. Then check the port
+from the Mac:
+
+```
+lsof -nP -iTCP:9222 -sTCP:LISTEN
+curl -s http://127.0.0.1:9222/json/version
+```
+
+The first lists a Google Chrome process; the second prints JSON with
+`"Browser": "Chrome/..."`. Press Pull Data once that works. In testing a pull
+read 3 pages and inserted the 29 entries newer than the seed data.
+
+The worker image contains chromedriver `154.0.8037.92`, which matches Chrome
+154. chromedriver must match your Chrome's major version (see
+`chrome://version`); pick an exact version from
+[Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) and rebuild:
+
+```
+CHROMEDRIVER_VERSION=<version> docker compose build worker
+docker compose up -d worker
+```
+
+(Compose passes the value to the build as tested with `docker compose config`;
+only the default version has been built and run.)
+
+Without a Chrome session the task fails cleanly: the worker logs
+`PullPreconditionError: PULL FAILED: could not attach to Chrome for scraping.`,
+nacks the message without requeue, and keeps running; `tasks_q` is left empty.
+
+## Docker Hub
+
+The images are public at
+[hub.docker.com/r/vixbot/module_6](https://hub.docker.com/r/vixbot/module_6):
+
+| Tag | Built from | Compressed size |
+|---|---|---|
+| `web-v1` | `src/web` | 53.7 MiB |
+| `worker-v1` | `src/worker` (includes chromedriver) | 80.4 MiB |
+
+To run the published images instead of building, from `module_6/`:
+
+```
+docker compose pull web worker
+docker compose up -d --no-build
+```
+
+`docker pull vixbot/module_6:web-v1` and `docker pull vixbot/module_6:worker-v1`
+work without a Docker Hub login. The compose file is still needed for the
+database, RabbitMQ, the seed data and the volume mounts.
+
+## Database
+
+The worker runs `load_data.initialize_database()` every time it starts, under
+a PostgreSQL advisory lock:
+
+* It creates the three tables if missing: `applicants` (one row per Grad
+  Café entry, unique on `url`), `ingestion_watermarks` (the highest Grad Café
+  result ID loaded so far, the `<id>` in `/result/<id>`), and `analysis_summary`
+  (a single row holding the analysis the page shows).
+* If `applicants` is empty, it loads `src/data/applicant_data.json` (mounted
+  read-only at `/data`): 60,024 rows (one record has no URL and is skipped) and
+  sets the watermark to 1,020,478. On later starts it logs
+  "applicants already has rows: seed skipped".
+* If there is no stored analysis yet, it computes one.
+* It creates or updates the read-only role `gradcafe_web`: CONNECT, schema
+  USAGE and **SELECT only** on the three tables. PostgreSQL refuses INSERT,
+  UPDATE, DELETE and CREATE TABLE for it.
+
+Scraping is incremental and idempotent. An entry counts as new when its result
+ID is above the watermark; rows are inserted with `ON CONFLICT (url) DO
+NOTHING`, and the watermark only moves forward (`GREATEST`). A repeated pull
+with nothing new inserts nothing; it still refreshes "Data last updated" and
+recomputes the analysis.
+
+## Project layout
+
+```
+module_6/
+  docker-compose.yml        db, rabbitmq, web, worker; volume pgdata
+  .env.example              every Compose variable, with its default
+  setup.py                  packaging metadata (packages app and etl)
+  requirements.in / .txt    development lock: both services + test and lint tools
+  pytest.ini
+  src/
+    web/                    Docker build context of the web image
+      Dockerfile, requirements.in/.txt, run.py, publisher.py
+      app/                  Flask app: routes, db reads, applicant search, templates, static
+    worker/                 Docker build context of the worker image
+      Dockerfile, requirements.in/.txt, consumer.py
+      etl/                  incremental_scraper.py, query_data.py
+    db/                     load_data.py, sql_utils.py, setup_roles.py
+                            (mounted read-only into the worker at /app/db)
+    data/applicant_data.json   seed data (60,025 records)
+  tests/                    pytest suite (fixtures/ holds synthetic Grad Café pages)
+  docs/                     earlier modules' Sphinx sources (not updated for Module 6)
+  report/                   report source and screenshots
+```
+
+Each service's Docker build context is its own folder, so `web` and `worker`
+don't import each other. The worker gets the `db` modules from the mount
+(`PYTHONPATH=/app/db`).
+
+## Tests and Pylint
+
+The tests run on the host against a local PostgreSQL test database (they don't
+need Docker, RabbitMQ or Chrome: pika's connection and the browser are faked).
+Create a database whose name ends in `_test`, and give its URL in
+`module_6/.env` or the environment:
+
+```
 createdb jhu_module6_test
-cp .env.example .env
+TEST_DATABASE_URL=postgresql://USER@localhost:5432/jhu_module6_test
 ```
 
-Edit `.env` (see [Environment variables](#environment-variables)).
-
-### Option A: pip and venv
+Install with Python 3.11 or later, from the repository root:
 
 ```
-python3.12 -m venv venv
-source venv/bin/activate
-python -m pip install -r requirements.txt
-python -m pip install -e .
+python -m pip install -r module_6/requirements.txt
+python -m pytest -c module_6/pytest.ini -m "web or buttons or analysis or db or integration" module_6/tests
 ```
 
-### Option B: uv
-
-If a conda environment is active, activate `.venv` (as below) before any `uv pip` command: uv targets `$VIRTUAL_ENV` first, then `$CONDA_PREFIX`, and only then `.venv`, so it would otherwise install into (and `uv pip sync` would prune) the conda environment.
-
-```
-uv venv --python 3.12
-source .venv/bin/activate
-uv pip sync requirements.txt
-uv pip install -e .
-```
-
-## Environment variables
-
-Settings are read from the environment first, then from `module_6/.env`
-(git-ignored; `.env.example` is the template). A variable already set in
-the environment always wins over `.env`.
-
-| Variable | Required | Meaning |
-|---|---|---|
-| `DB_HOST` | yes | PostgreSQL server host |
-| `DB_PORT` | no | PostgreSQL port (default 5432) |
-| `DB_NAME` | yes | The development database, `jhu_module6` (the tests never use it) |
-| `DB_USER` | yes | The user the app connects as: the owner at first, then `gradcafe_app` (see [Database roles](#database-roles-least-privilege)) |
-| `DB_PASSWORD` | no | Its password; leave empty for local trust authentication |
-| `TEST_DATABASE_URL` | for tests | The test database URL, e.g. `postgresql://your_username@localhost:5432/jhu_module6_test`; its name must end in `_test` |
-| `APP_DB_USER` | for `setup_roles.py` | The least-privilege role to create (`gradcafe_app`) |
-| `APP_DB_PASSWORD` | for `setup_roles.py` | Its password |
-| `FLASK_DEBUG` | no | `1` turns on the Flask debugger and reloader (never in production; off by default) |
-
-A missing required variable stops the app and scripts with a message
-naming every missing one.
-
-## Configure PostgreSQL and load the data
-
-With `.env` pointing at `jhu_module6` as the database owner (your own
-PostgreSQL user), load the bundled dataset
-(`data/llm_extend_applicant_data_full.json.gz`, the cleaned Module 2 data).
-This creates the `applicants` table if needed:
+The suite (375 tests) enforces 100% statement coverage of `module_6/src`.
+Pylint, from `module_6/` (10.00/10):
 
 ```
-python src/load_data.py
+python -m pylint --py-version=3.11 --source-roots=src/web,src/worker,src/db src/web src/worker src/db
 ```
-
-To load a different file, pass its path (`.json` or `.json.gz`):
-`python src/load_data.py path/to/data.json`. If PostgreSQL isn't reachable,
-the loader exits with status 1 and says what to check.
-
-**Expected results after a fresh load:** `Inserted: 60024`,
-`Skipped duplicates: 0`, `Failed to parse: 1`. The file holds 60,025
-records; one has no URL (0-based record index 13125) and is skipped, because
-the URL is the table's natural key. The page then shows Fall 2026 applicant
-count (Q1) = **32,344**, Q7 = 20, Q8 = 30, Q9 = 26.
-
-## Database roles (least privilege)
-
-Two roles: the owner (your PostgreSQL user, which owns `jhu_module6` and the
-`applicants` table, and runs `load_data.py`) and the app role `gradcafe_app`,
-which the Flask app and Pull Data connect as day to day. The app role can only
-connect, read (`SELECT`) and add (`INSERT`) applicant rows: no `UPDATE`,
-`DELETE`, `TRUNCATE`, `CREATE` (tables or temp tables), and no superuser,
-create-database or create-role attributes.
-
-1. Load the data as the owner (`python src/load_data.py`, above).
-2. Set `APP_DB_USER` and `APP_DB_PASSWORD` in `.env`.
-3. Create or update the role as the owner. The inline `DB_USER`/`DB_PASSWORD`
-   override `.env`; replace `your_owner_role` with the owner's name. It prints
-   the statements it ran, with the password masked, and is safe to re-run:
-
-   ```
-   DB_USER=your_owner_role DB_PASSWORD= python src/setup_roles.py
-   ```
-
-4. In `.env`, set `DB_USER` and `DB_PASSWORD` to the `APP_DB_USER` and
-   `APP_DB_PASSWORD` values, then start the app.
-
-Once `.env` points at the app role, the owner-only scripts need the owner
-override inline every time: `load_data.py` (the app role can't create the
-table) and `setup_roles.py` (it can't create roles or grant privileges):
-
-```
-DB_USER=your_owner_role DB_PASSWORD= python src/load_data.py
-DB_USER=your_owner_role DB_PASSWORD= python src/setup_roles.py
-```
-
-The app itself (`python src/flask_app.py`) and Pull Data run as the app role
-from `.env`, with no override.
-
-If the `applicants` table is missing, the app (connected as `gradcafe_app`)
-can't create it and answers 503 "applicants table missing; run load_data.py
-as the database owner".
-
-Local authentication note: Postgres.app trusts local connections, so the app
-role's password isn't checked locally. Its privileges still are: any statement
-outside `SELECT`/`INSERT` fails with "permission denied".
-
-## Run the Flask app
-
-From `module_6/`:
-
-```
-python src/flask_app.py
-```
-
-Then open http://127.0.0.1:5000/ (the page is also served at `/analysis`).
-On an empty database the page shows "N/A" answers instead of failing. Set
-`FLASK_DEBUG=1` for the debugger; it is off by default.
-
-### Pull Data and Update Analysis
-
-**Precondition.** The "Pull Data" button scrapes new entries from Grad Cafe.
-It requires a Chrome browser already running with remote debugging enabled
-(`--remote-debugging-port=9222`), with Grad Cafe's Cloudflare challenge
-already manually cleared in that session. Pull Data attaches to that
-existing, already-verified session — it does not launch a browser or solve
-the challenge itself. Without it, the pull fails fast and the failure is
-shown on the page (see "Last pull" below).
-
-**Newest entries first.** Every pull starts at the first (newest) results
-page and keeps only entries whose URL is not already in the database. It
-stops at the first page whose entries are all already loaded, once 300 new
-entries have been collected, or at the end of pagination.
-
-**Crash handling.** If the browser session crashes mid-pull, the scraper
-re-attaches and retries the page that failed, keeping what it already
-collected. After 3 consecutive failed retries it gives up, and the pull is
-recorded as failed instead of retrying forever.
-
-**One pull at a time.** While a pull is running, Pull Data and Update
-Analysis both answer HTTP 409 (`{"busy": true}`), and the page shows a
-"pull in progress" banner.
-
-**Last pull.** Every pull, successful or not, records its outcome in
-`src/_pull_data_result.json` (not committed). The page shows it under the
-buttons, and the same information is available as JSON:
-
-```
-GET /pull-status
-{"last_result": {"ok": true, "inserted": 2, "skipped": 0, "failed": 0,
-                 "error": null, "finished_at": "2026-09-27T17:33:44+00:00"},
- "running": false}
-```
-
-`last_result` is `null` before the first pull.
-
-**Update Analysis.** The page shows the analysis as of the last Update
-Analysis (the time is shown under the buttons). After a pull finishes,
-click Update Analysis to recompute the numbers with the new rows.
-
-### `GET /api/applicants`
-
-Returns applicant rows as JSON (a fixed column list; the free-text
-`comments` column is never returned), on a read-only connection.
-
-| Parameter | Accepted values | Default |
-|---|---|---|
-| `limit` | An integer; clamped to 1–100 (`0` → 1, `500` → 100) | 10 |
-| `sort` | `p_id`, `date_added`, `gpa`, `gre`, `university`, `program` | `p_id` |
-| `order` | `asc`, `desc` | `asc` |
-| `university` | Substring match on the standardized university name, at most 100 characters; `%`, `_` and `\` match literally | none |
-
-```
-GET /api/applicants?limit=5&sort=gpa&order=desc&university=Johns%20Hopkins
-{"count": 5, "limit": 5, "sort": "gpa", "order": "desc", "rows": [...]}
-```
-
-A non-integer `limit`, an unknown `sort` or `order`, or a `university`
-filter over 100 characters returns **400** with `{"error": "..."}`; no SQL
-is built. A database that is unreachable, a missing table, or a permission
-error returns **503**.
-
-## Run the tests
-
-From the **repository root**:
-
-```
-pytest -c module_6/pytest.ini module_6/tests
-```
-
-* The run enforces 100% statement coverage of `module_6/src`
-  (`--cov-fail-under=100` in `pytest.ini`) and prints a per-file report;
-  `coverage_summary.txt` is a saved copy of that report.
-* Tests use `TEST_DATABASE_URL` only, never the app database, and never read
-  the developer's `.env` beyond that one value.
-* Every test carries at least one marker: `web`, `buttons`, `analysis`, `db`,
-  `integration`. Run one group with, for example,
-  `pytest -c module_6/pytest.ini -m buttons module_6/tests` (a partial run
-  reports a coverage failure; only the full suite reaches 100%). The
-  command CI runs selects every marker, which is the entire suite:
-  ```
-  python -m pytest -c module_6/pytest.ini -m "web or buttons or analysis or db or integration" module_6/tests
-  ```
-* CI runs that command on every push and pull request to `main`; see
-  [Continuous integration](#continuous-integration).
-
-## Pylint
-
-From `module_6/` (the saved output is `pylint_report.txt`, 10.00/10):
-
-```
-python -m pylint src
-```
-
-No Pylint checks are disabled. Exceptions are caught by specific type only
-(no bare `except:` or `except Exception`), and every handler logs the error
-and returns a specific response or exit code.
-
-## Dependency graph
-
-`module_6/dependency.svg` is the import graph of the Flask app, generated
-with pydeps (from `requirements.txt`) and Graphviz (`dot` must be on
-`PATH`; on Ubuntu, `sudo apt-get install graphviz`). From `module_6/`:
-
-```
-pydeps src/flask_app.py --noshow -T svg -o dependency.svg --max-module-depth 1 --rankdir TB --only applicant_search busy_state config flask_app load_data models orm_queries pull_data query_data scrape sql_utils flask psycopg2 sqlalchemy dotenv selenium bs4
-```
-
-* `--max-module-depth 1` collapses each package to one node
-  (`sqlalchemy.orm`, `sqlalchemy.sql`, ... become `sqlalchemy`).
-* `--rankdir TB` draws the layers top to bottom: third-party packages,
-  then the database and config helpers, then the services, then
-  `flask_app.py`.
-* `--only` keeps the `src` modules and the six key third-party packages,
-  dropping the transitive ones (werkzeug, jinja2, greenlet, urllib3, ...).
-  A new `src` module must be added to this list to appear in the graph.
-
-`setup_roles.py` is not in the graph: it is a standalone command-line
-script that the app never imports.
-
-## Security scan
-
-The dependencies are scanned with the Snyk CLI (`snyk auth` first). From
-`module_6/`, with the virtual environment synced from `requirements.txt`:
-
-```
-snyk test --file=requirements.txt --package-manager=pip --command=venv/bin/python
-```
-
-Prerequisite: Snyk ignores the `os_name == 'nt'` markers on two
-Windows-only entries in the lock and stops with "Missing required packages"
-unless they are installed, so install them into the venv first:
-`uv pip install cffi==2.1.1 pycparser==3.0 --python venv/bin/python`.
-The saved output is `module_6/snyk_test_output.txt` (64 dependencies, 0
-issues).
-
-Snyk Code (static analysis) runs with `snyk code test src` and
-`snyk code test tests`; the saved output is `snyk_code_output.txt`. Its 11
-findings are reviewed in `SNYK_FINDINGS.md`: all are false positives, left
-open rather than ignored.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` (repository root) runs four jobs on every push
-and pull request to `main` (and on demand from the Actions tab), each on
-Ubuntu 24.04 with Python 3.12 and `module_6/requirements.txt`:
+`.github/workflows/module6.yml` ("Module 6 CI") runs on every push and pull
+request to `main`, on Ubuntu 24.04 with Python 3.11:
 
-| Job | What it checks |
+| Job | What it does |
 |---|---|
-| `pylint` | `python -m pylint src --fail-under=10` from `module_6/`; it also fails if the two workflow copies differ |
-| `dependency-graph` | Installs Graphviz, runs the pydeps command above, fails unless `dependency.svg` exists and has nodes, and uploads it as an artifact |
-| `snyk` | `snyk test` (fails on high or critical issues), then `snyk code test src` as a report only (its findings are the documented false positives in `SNYK_FINDINGS.md`) |
-| `pytest` | The full suite against a PostgreSQL 16 service container, with 100% coverage enforced |
+| `pylint` | The Pylint command above, with `--fail-under=10`. |
+| `pytest` | The full suite against a `postgres:16` service container (`jhu_module6_test`). |
+| `compose-config` | `docker compose -f module_6/docker-compose.yml config --quiet` (validates the compose file; builds nothing). |
 
-The `snyk` job needs a repository secret named `SNYK_TOKEN` (Settings >
-Secrets and variables > Actions) holding a Snyk API token; without it the
-job stops with an error naming the missing secret.
+`.github/workflows/ci.yml` keeps Module 5's dependency graph and Snyk scans,
+and `tests.yml` Module 4's tests.
 
-GitHub only runs workflows from the repository root, so the root copy is
-the one that executes. `module_5/.github/workflows/ci.yml` is an identical
-copy kept for the expected module layout; the `pylint` job compares the two
-and fails if they differ. The Module 4 workflow, `tests.yml`, is unchanged.
+## Known limitations
 
-## Documentation
-
-The published Read the Docs site
-(https://jhu-software-concepts-vtalbot1.readthedocs.io) still builds the
-**Module 4** documentation (`.readthedocs.yaml` points at `module_4/docs`).
-
-`module_6/docs/source/` is the Module 4 documentation carried forward: its
-API pages autodoc the `module_6/src` code, but its text has not been
-updated for Module 5 (there are no pages yet for `applicant_search`,
-`sql_utils`, `models`, `setup_roles` or `/api/applicants`; this README and
-the report cover them). To build it locally, from the repository root
-(warnings are treated as errors):
-
-```
-sphinx-build -W --keep-going -b html module_6/docs/source module_6/docs/build/html
-```
+* **Pull cap.** A pull collects at most 300 new entries, newest first. If more
+  than 300 arrived since the last pull, the older ones are skipped, and the
+  advanced watermark means a later pull won't go back for them.
+* **No LLM fields on scraped rows.** `llm_generated_program` and
+  `llm_generated_university` are empty for scraped entries (the LLM cleaning
+  from Module 2 isn't part of the pipeline), so questions that use those fields
+  only count seed rows.
+* **Restart after the host sleeps.** When the Mac sleeps, the RabbitMQ
+  connection's 600-second heartbeat lapses; the worker exits and
+  `restart: unless-stopped` brings it back within seconds. No message is lost
+  (`tasks_q` is durable and a task is only acked after its commit).
+* **Wrong web password looks like initialising.** PostgreSQL reports a wrong
+  `WEB_DB_PASSWORD` the same way as a role that doesn't exist yet, so the page
+  keeps showing "The database is being initialised".
+* **Development server.** The web service runs Flask's built-in server, which
+  logs that it isn't meant for production.
+* **`docs/`** still holds the Sphinx sources from Modules 4–5; they are not
+  updated for Module 6 and are not part of this module's deliverables.
